@@ -1,0 +1,121 @@
+/** Definitions of DMAP tags used by various applications. */
+
+import { getLogger } from "../../support/logging.ts";
+import { DmapTag } from "./parser.ts";
+import { readBool, readBplist, readBytes, readIgnore, readStr, readUint, type TagReader } from "./tags.ts";
+
+const LOGGER = getLogger("pyatv.protocols.dmap.tag_definitions");
+
+// Internal version that works like readIgnore, but also logs
+const readUnknown: TagReader = (data, start, length) => {
+  LOGGER.warning("Unknown data: %s", data.subarray(Math.max(0, start - 8), start + length + 8));
+  return undefined;
+};
+readUnknown.tagType = "unknown";
+
+// These are the tags that we know about so far
+const TAGS: Record<string, DmapTag> = {
+  aelb: new DmapTag(readBool, "com.apple.itunes.like-button"),
+  aels: new DmapTag(readUint, "com.apple.itunes.liked-state"),
+  aeFP: new DmapTag(readUint, "com.apple.itunes.req-fplay"),
+  aeGs: new DmapTag(readBool, "com.apple.itunes.can-be-genius-seed"),
+  aeSV: new DmapTag(readUint, "com.apple.itunes.music-sharing-version"),
+  apro: new DmapTag(readUint, "daap.protocolversion"),
+  asai: new DmapTag(readUint, "daap.songalbumid"),
+  asal: new DmapTag(readStr, "daap.songalbum"),
+  asar: new DmapTag(readStr, "daap.songartist"),
+  asgr: new DmapTag(readUint, "com.apple.itunes.gapless-resy"),
+  astm: new DmapTag(readUint, "daap.songtime"),
+  ated: new DmapTag(readBool, "daap.supportsextradata"),
+  caar: new DmapTag(readUint, "dacp.albumrepeat"),
+  caas: new DmapTag(readUint, "dacp.albumshuffle"),
+  caci: new DmapTag("container", "dacp.controlint"),
+  cafe: new DmapTag(readBool, "dacp.fullscreenenabled"),
+  cafs: new DmapTag(readUint, "dacp.fullscreen"),
+  cana: new DmapTag(readStr, "daap.nowplayingartist"),
+  cang: new DmapTag(readStr, "dacp.nowplayinggenre"),
+  canl: new DmapTag(readStr, "daap.nowplayingalbum"),
+  cann: new DmapTag(readStr, "daap.nowplayingtrack"),
+  canp: new DmapTag(readBytes, "daap.nowplayingid"),
+  cant: new DmapTag(readUint, "dacp.remainingtime"),
+  capr: new DmapTag(readUint, "dacp.protocolversion"),
+  caps: new DmapTag(readUint, "dacp.playstatus"),
+  carp: new DmapTag(readUint, "dacp.repeatstate"),
+  cash: new DmapTag(readUint, "dacp.shufflestate"),
+  cast: new DmapTag(readUint, "dacp.tracklength"),
+  casu: new DmapTag(readUint, "dacp.su"),
+  cavc: new DmapTag(readBool, "dacp.volumecontrollable"),
+  cave: new DmapTag(readBool, "dacp.dacpvisualizerenabled"),
+  cavs: new DmapTag(readUint, "dacp.visualizer"),
+  ceGS: new DmapTag(readStr, "com.apple.itunes.genius-selectable"),
+  ceQR: new DmapTag("container", "com.apple.itunes.playqueue-contents-response"),
+  ceSD: new DmapTag(readBplist, "playing metadata"),
+  cmcp: new DmapTag("container", "dmcp.controlprompt"),
+  cmmk: new DmapTag(readUint, "dmcp.mediakind"),
+  cmnm: new DmapTag(readStr, "dacp.devicename"),
+  cmpa: new DmapTag("container", "dacp.pairinganswer"),
+  cmpg: new DmapTag(readUint, "dacp.pairingguid"),
+  cmpr: new DmapTag(readUint, "dmcp.protocolversion"),
+  cmsr: new DmapTag(readUint, "dmcp.serverrevision"),
+  cmst: new DmapTag("container", "dmcp.playstatus"),
+  cmty: new DmapTag(readStr, "dacp.devicetype"),
+  mdcl: new DmapTag("container", "dmap.dictionary"),
+  miid: new DmapTag(readUint, "dmap.itemid"),
+  minm: new DmapTag(readStr, "dmap.itemname"),
+  mlcl: new DmapTag("container", "dmap.listing"),
+  mlid: new DmapTag(readUint, "dmap.sessionid"),
+  mlit: new DmapTag("container", "dmap.listingitem"),
+  mlog: new DmapTag("container", "dmap.loginresponse"),
+  mpro: new DmapTag(readUint, "dmap.protocolversion"),
+  mrco: new DmapTag(readUint, "dmap.returnedcount"),
+  msal: new DmapTag(readBool, "dmap.supportsautologout"),
+  msbr: new DmapTag(readBool, "dmap.supportsbrowse"),
+  msdc: new DmapTag(readUint, "dmap.databasescount"),
+  msed: new DmapTag(readBool, "dmap.supportsedit"),
+  msex: new DmapTag(readBool, "dmap.supportsextensions"),
+  msix: new DmapTag(readBool, "dmap.supportsindex"),
+  mslr: new DmapTag(readBool, "dmap.loginrequired"),
+  mspi: new DmapTag(readBool, "dmap.supportspersistentids"),
+  msqy: new DmapTag(readBool, "dmap.supportsquery"),
+  msrv: new DmapTag("container", "dmap.serverinforesponse"),
+  mstc: new DmapTag(readUint, "dmap.utctime"),
+  mstm: new DmapTag(readUint, "dmap.timeoutinterval"),
+  msto: new DmapTag(readUint, "dmap.utcoffset"),
+  mstt: new DmapTag(readUint, "dmap.status"),
+  msup: new DmapTag(readBool, "dmap.supportsupdate"),
+  mtco: new DmapTag(readUint, "dmap.containercount"),
+  aead: new DmapTag(readBytes, "unknown tag"),
+  aeFR: new DmapTag(readUint, "unknown tag"),
+  aeSX: new DmapTag(readUint, "unknown tag"),
+  asse: new DmapTag(readUint, "unknown tag"),
+  atCV: new DmapTag(readUint, "unknown tag"),
+  atSV: new DmapTag(readUint, "unknown tag"),
+  caks: new DmapTag(readUint, "unknown tag"),
+  caov: new DmapTag(readUint, "unknown tag"),
+  capl: new DmapTag(readBytes, "unknown tag"),
+  casa: new DmapTag(readUint, "unknown tag"),
+  casc: new DmapTag(readUint, "unknown tag"),
+  cass: new DmapTag(readUint, "unknown tag"),
+  ceQA: new DmapTag(readUint, "unknown tag"),
+  ceQU: new DmapTag(readBool, "unknown tag"),
+  ceMQ: new DmapTag(readBool, "unknown tag"),
+  ceNQ: new DmapTag(readUint, "unknown tag"),
+  ceNR: new DmapTag(readBytes, "unknown tag"),
+  ceQu: new DmapTag(readBool, "unknown tag"),
+  cmbe: new DmapTag(readStr, "unknown tag"),
+  cmcc: new DmapTag(readStr, "unknown tag"),
+  cmce: new DmapTag(readStr, "unknown tag"),
+  cmcv: new DmapTag(readIgnore, "unknown tag"),
+  cmik: new DmapTag(readUint, "unknown tag"),
+  cmsb: new DmapTag(readUint, "unknown tag"),
+  cmsc: new DmapTag(readUint, "unknown tag"),
+  cmsp: new DmapTag(readUint, "unknown tag"),
+  cmsv: new DmapTag(readUint, "unknown tag"),
+  cmte: new DmapTag(readStr, "unknown tag"),
+  mscu: new DmapTag(readUint, "unknown tag"),
+};
+
+/** Look up a tag based on its key. Returns a DmapTag. */
+export function lookupTag(name: string): DmapTag {
+  return Object.prototype.hasOwnProperty.call(TAGS, name) ? TAGS[name]! : new DmapTag(readUnknown, "unknown tag");
+}

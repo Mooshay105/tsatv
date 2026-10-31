@@ -1,0 +1,29 @@
+{
+	"name": "tsatv",
+	"version": "0.18.0",
+	"description": "TypeScript (Bun) port of pyatv: a client library for Apple TV and AirPlay devices",
+	"module": "src/index.ts",
+	"type": "module",
+	"private": true,
+	"bin": {
+		"atvremote": "src/scripts/atvremote.ts",
+		"atvscript": "src/scripts/atvscript.ts",
+		"atvlog": "src/scripts/atvlog.ts",
+		"atvproxy": "src/scripts/atvproxy.ts"
+	},
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "tsc --noEmit -p .",
+		"gen-protobuf": "bun scripts/gen_protobuf.ts",
+		"atvremote": "bun src/scripts/atvremote.ts",
+		"atvscript": "bun src/scripts/atvscript.ts",
+		"atvlog": "bun src/scripts/atvlog.ts",
+		"atvproxy": "bun src/scripts/atvproxy.ts"
+	},
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^7"
+	}
+}

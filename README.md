@@ -1,111 +1,106 @@
-A client library for Apple TV and AirPlay devices
-=================================================
+# tsatv
 
-<img src="https://raw.githubusercontent.com/postlund/pyatv/master/docs/assets/img/logo.svg?raw=true" width="150">
+A TypeScript port of [pyatv](https://pyatv.dev) (version 0.18.0) for [Bun](https://bun.com):
+a client library for Apple TV and AirPlay devices.
 
-![Tests](https://github.com/postlund/pyatv/workflows/Tests/badge.svg)
-![pyatv Actions](https://api.meercode.io/badge/postlund/pyatv?type=ci-success-rate&branch=master&lastDay=30)
-[![codecov](https://codecov.io/gh/postlund/pyatv/branch/master/graph/badge.svg)](https://codecov.io/gh/postlund/pyatv)
-[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![PyPi Package](https://badge.fury.io/py/pyatv.svg)](https://badge.fury.io/py/pyatv)
-[![Gitpod Ready-to-Code](https://img.shields.io/badge/Gitpod-ready--to--code-blue?logo=gitpod)](https://gitpod.io/#https://github.com/postlund/pyatv)
-[![Downloads](https://static.pepy.tech/badge/pyatv)](https://pepy.tech/project/pyatv)
-[![PyPI pyversions](https://img.shields.io/pypi/pyversions/pyatv.svg)](https://pypi.python.org/pypi/pyatv/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+It supports scanning, pairing and connecting to devices over all protocols supported by
+pyatv: **AirPlay** (v1 and v2, including the MRP tunnel), **Companion**, **DMAP**, **MRP**
+and **RAOP** (audio streaming). The bundled scripts `atvremote`, `atvscript`, `atvlog`
+and `atvproxy` are included too.
 
-This is an asyncio python library for interacting with Apple TV and AirPlay devices. It mainly
-targets Apple TVs (all generations, **including tvOS 15 and later**), but also supports audio streaming via AirPlay
-to receivers like the HomePod, AirPort Express and third-party speakers. It can act as remote control to the Music
-app/iTunes in macOS.
+There are no runtime dependencies. Everything (protobuf, OPACK, binary plist, SRP,
+ChaCha20-Poly1305, mDNS, RTSP, ...) is implemented using Bun/Node built-ins.
 
-All the documentation you need is available at **[pyatv.dev](https://pyatv.dev)**.
+## Getting started
 
-# What can it do?
-
-Some examples include:
-
-* Remote control commands
-* Metadata retrieval with push updates
-* Stream files via AirPlay
-* List and launch installed apps
-* List and switch user accounts
-* Add, remove or set audio output devices (e.g. HomePods)
-* Keyboard support
-* Persistent storage of credentials and settings
-
-...and lots more! A complete list is available [here](https://pyatv.dev/documentation/supported_features/).
-
-# Great, but how do I use it?
-
-All documentation (especially for developers) are available at [pyatv.dev](https://pyatv.dev).
-It is however possible to install with `pip` and set up a new device `atvremote`:
-
-```raw
-$ pip install pyatv
-$ atvremote wizard
-Looking for devices...
-Found the following devices:
-    Name                      Model                    Address
---  ------------------------  -----------------------  -----------
- 1  Receiver+                 airupnp                  10.0.10.200
- 2  Receiver                  RX-V773                  10.0.10.82
- 3  Pierre's AirPort Express  AirPort Express (gen 2)  10.0.10.168
- 4  FakeATV                   Unknown                  10.0.10.254
- 5  Vardagsrum                Apple TV 4K              10.0.10.81
- 6  Apple TV                  Apple TV 3               10.0.10.83
-Enter index of device to set up (q to quit): 4
-Starting to set up FakeATV
-Starting to pair Protocol.MRP
-Enter PIN on screen: 1111
-Successfully paired Protocol.MRP, moving on...
-Pairing finished, trying to connect and get some metadata...
-Currently playing:
-  Media type: Music
-Device state: Playing
-       Title: Never Gonna Give You Up
-      Artist: Rick Astley
-    Position: 1/213s (0.0%)
-      Repeat: Off
-     Shuffle: Off
-Device is now set up!
+```bash
+bun install
+bun test          # run test suite
+bun run typecheck # type check with tsc
 ```
 
-After setting up a new device, other commands can be run directly:
+```ts
+import { connect, scan } from "./src/index.ts";
 
-```raw
-$ atvremote -s 10.0.10.254 playing
-  Media type: Music
-Device state: Playing
-       Title: Never Gonna Give You Up
-      Artist: Rick Astley
-    Position: 1/213s (0.0%)
-      Repeat: Off
-     Shuffle: Off
-$ atvremote -s 10.0.10.254 pause
-$ atvremote -n FakeATV play
+const atvs = await scan({ timeout: 5 });
+console.log(atvs.map(String).join("\n"));
+
+const atv = await connect(atvs[0]!);
+try {
+	console.log(String(await atv.metadata.playing()));
+	await atv.remoteControl.playPause();
+} finally {
+	await Promise.allSettled(atv.close());
+}
 ```
 
-You can also run it inside a container (x86_64, aarch64, armv7):
+Pairing works the same way as in pyatv:
 
-```raw
-docker run -it --rm --network=host ghcr.io/postlund/pyatv:0.14.0 atvremote scan
+```ts
+import { pair } from "./src/index.ts";
+import { Protocol } from "./src/const.ts";
+
+const pairing = await pair(config, Protocol.Companion);
+await pairing.begin();
+pairing.pin(1234); // PIN shown on screen
+await pairing.finish();
+console.log(pairing.service.credentials);
+await pairing.close();
 ```
 
-The `master` tag points to latest commit on the `master` branch and `latest`
-points to the latest release.
+## Scripts
 
-# I need to change something?
+```bash
+bun run atvremote scan
+bun run atvremote --id <identifier> playing
+bun run atvremote --id <identifier> --protocol companion pair
+bun run atvscript --id <identifier> push_updates
+bun run atvlog -o log.html pyatv.log
+bun run atvproxy mrp <credentials> <ip>
+```
 
-Want to help out with `pyatv`? Press the button below to get a fully prepared development environment and get started right away!
+Commands and arguments are the same as in pyatv (snake_case, e.g. `play_pause`,
+`set_volume=50`, `print_settings`). Run `atvremote commands` for a full list.
 
-[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/postlund/pyatv)
+## Differences from pyatv
 
-# Shortcuts to the good stuff
+The API follows pyatv closely but is adapted to TypeScript conventions:
 
-To save you some time, here are some shortcuts:
+- **Naming:** methods and properties use camelCase (`playPause()`, `deviceState`,
+  `remoteControl`). Listener methods do too (`playstatusUpdate`, `connectionLost`,
+  `powerstateUpdate`, ...). **Settings** keep their snake_case field names
+  (`settings.protocols.airplay.credentials`) so the storage file format is compatible
+  with pyatv.
+- **No event loop argument:** functions like `scan`, `connect` and `pair` take an
+  options object instead of `loop` + keyword arguments, e.g.
+  `connect(config, { protocol, storage })`.
+- **Types:** enums are numeric TypeScript enums, addresses are strings, binary data is
+  `Buffer`, 64-bit values that don't fit a JavaScript number are `bigint`.
+- **`close()`** returns a `Set<Promise>` (instead of a set of tasks), so use
+  `await Promise.allSettled(atv.close())`.
+- **Streaming (`streamFile`)** accepts a file name, an HTTP(S) URL, a `Uint8Array`, a web
+  `ReadableStream`, an async iterable of bytes or anything with an async `read()` method.
+- **Audio decoding:** pyatv uses miniaudio. Here WAV files are decoded natively; other
+  formats (MP3, FLAC, Ogg Vorbis, ...) are decoded with `ffmpeg`/`ffprobe`, which must be
+  installed on the system for those formats. Metadata is read natively from WAV (RIFF
+  INFO and ID3) and ID3v2 tags; other formats use `ffprobe`.
+- **Zeroconf:** pyatv can scan using python-zeroconf. This port always uses its own mDNS
+  implementation (the same as pyatv's default scanner), and includes a minimal mDNS
+  responder for publishing services (used by DMAP pairing and `atvproxy`).
 
-* [Getting started](https://pyatv.dev/documentation/getting-started/)
-* [Documentation](https://pyatv.dev/documentation)
-* [Development](https://pyatv.dev/development)
-* [API Reference](https://pyatv.dev/api)
-* [Support](https://pyatv.dev/support)
+## Project layout
+
+- `src/` – the library (same module structure as `pyatv/`), scripts in `src/scripts/`
+- `tests/` – the pyatv test suite ported to `bun test`, including fake devices for all
+  protocols in `tests/fake_device/`
+- `protos/` and `scripts/gen_protobuf.ts` – MRP protobuf definitions and the code
+  generator producing `src/protocols/mrp/protobuf/index.ts` (`bun run gen-protobuf`)
+
+## Testing
+
+All of pyatv's tests are ported (1250+ tests) and run in a few seconds. The three tests
+skipped in pyatv are also skipped here. `atvproxy`, which has no tests in pyatv, has
+end-to-end tests for its MRP and Companion proxies. Its AirPlay proxy is untested, since
+the fake AirPlay device only supports legacy (AirPlay 1) authentication.
+
+Set `PYATV_TEST_LOG=1` to print debug logs when running tests.

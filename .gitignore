@@ -1,102 +1,34 @@
-# File based on .gitignore from home-assistant.io
+# dependencies (bun install)
+node_modules
 
-# Hide sublime text stuff
-*.sublime-project
-*.sublime-workspace
+# output
+out
+dist
+*.tgz
 
-# Hide some OS X stuff
-.DS_Store
-.AppleDouble
-.LSOverride
-Icon
+# code coverage
+coverage
+*.lcov
 
-# Thumbnails
-._*
+# logs
+logs
+_.log
+report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# caches
+.eslintcache
+.cache
+*.tsbuildinfo
+
+# IntelliJ based IDEs
 .idea
 
-# pytest
-.cache
-
-# GITHUB Proposed Python stuff:
-*.py[cod]
-
-# C extensions
-*.so
-
-# Packages
-*.egg
-*.egg-info
-dist
-build
-eggs
-.eggs
-parts
-bin
-var
-sdist
-develop-eggs
-.installed.cfg
-lib
-lib64
-include
-
-# Logs
-*.log
-pip-log.txt
-
-# Unit test / coverage reports
-.coverage*
-.tox
-nosetests.xml
-
-# Translations
-*.mo
-
-# Mr Developer
-.mr.developer.cfg
-.project
-.pydevproject
-
-.python-version
-
-# emacs auto backups
-*~
-*#
-*.orig
-
-# venv stuff
-pyvenv.cfg
-pip-selfcheck.json
-venv
-.venv
-
-# vimmy stuff
-*.swp
-*.swo
-
-ctags.tmp
-
-# vagrant stuff
-virtualization/vagrant/setup_done
-virtualization/vagrant/.vagrant
-virtualization/vagrant/config
-
-# Visual Studio Code
-.vscode
-
-# Windows Explorer
-desktop.ini
-
-# Other directories
-share
-htmlcov
-
-artwork.png
-.Python
-.pytest_cache
-.mypy_cache
-coverage.xml
-
-# Temporary stuff can be placed here (logs, credentials, etc.)
-work/
+# Finder (MacOS) folder config
+.DS_Store
