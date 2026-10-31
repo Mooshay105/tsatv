@@ -176,3 +176,41 @@ describe("parse rdata", () => {
     expect(buffer.tell()).toBe(data.length);
   });
 });
+
+describe("malformed messages", () => {
+  const header = (an: number, ar = 0) => Buffer.from([0, 0, 0x84, 0, 0, 0, 0, an, 0, 0, 0, ar]);
+  const name = b("\x03foo\x00");
+  const aRecord = Buffer.concat([name, Buffer.from([0, 1, 0, 1, 0, 0, 0, 10, 0, 4, 10, 0, 0, 1])]);
+
+  test("self-referencing compression pointer throws instead of looping", () => {
+    const msg = Buffer.concat([header(1), Buffer.from([0xc0, 12]), Buffer.from([0, 1, 0, 1, 0, 0, 0, 10, 0, 4, 1, 2, 3, 4])]);
+    expect(() => new dns.DnsMessage().unpack(msg)).toThrow("invalid compression pointer");
+  });
+
+  test("forward compression pointer throws", () => {
+    const msg = Buffer.concat([header(1), Buffer.from([0xc0, 40]), Buffer.from([0, 1, 0, 1, 0, 0, 0, 10, 0, 4, 1, 2, 3, 4])]);
+    expect(() => new dns.DnsMessage().unpack(msg)).toThrow("invalid compression pointer");
+  });
+
+  test("record with mismatching data length does not drop other records", () => {
+    // PTR record where rdLength (7) is longer than the encoded name (5)
+    const ptr = Buffer.concat([name, Buffer.from([0, 0x0c, 0, 1, 0, 0, 0, 10, 0, 7]), b("\x03bar\x00\x00\x00")]);
+    const msg = new dns.DnsMessage().unpack(Buffer.concat([header(1, 1), ptr, aRecord]));
+    expect(msg.answers).toHaveLength(1);
+    expect(msg.answers[0]!.qtype).toBe(dns.UNPARSED_TYPE);
+    expect(msg.resources).toHaveLength(1);
+    expect(msg.resources[0]!.rd).toBe("10.0.0.1");
+  });
+
+  test("record with unparsable data is kept raw", () => {
+    const badA = Buffer.concat([name, Buffer.from([0, 1, 0, 1, 0, 0, 0, 10, 0, 2, 1, 2])]);
+    const msg = new dns.DnsMessage().unpack(Buffer.concat([header(1, 1), badA, aRecord]));
+    expect(msg.answers[0]!.qtype).toBe(dns.UNPARSED_TYPE);
+    expect(msg.resources[0]!.rd).toBe("10.0.0.1");
+  });
+
+  test("record data exceeding message throws", () => {
+    const ptr = Buffer.concat([name, Buffer.from([0, 0x0c, 0, 1, 0, 0, 0, 10, 0, 50]), b("\x03bar\x00")]);
+    expect(() => new dns.DnsMessage().unpack(Buffer.concat([header(1), ptr]))).toThrow();
+  });
+});

@@ -2,12 +2,13 @@
 
 import { expect, spyOn, test } from "bun:test";
 import net from "node:net";
-import { ConnectionLostError } from "../../src/exceptions.ts";
+import { AuthenticationError, ConnectionLostError } from "../../src/exceptions.ts";
 import { createTask, Event } from "../../src/support/asyncio.ts";
 import {
   BasicHttpServer,
   formatRequest,
   formatResponse,
+  getDigestPayload,
   type HandlerResult,
   HttpConnection,
   httpConnect,
@@ -392,5 +393,103 @@ test("connection abort timeout if connection closed", async () => {
     expect(result.status).toBe("rejected");
     expect((result as PromiseRejectedResult).reason).toBeInstanceOf(ConnectionLostError);
   }
+  server.close();
+});
+
+// --- Late responses after timeouts (pyatv #2893, #1790, #2376) ---------------
+
+function fakeConnection(): HttpConnection {
+  const conn = new HttpConnection();
+  conn.connectionMade({ write() {}, close() {}, getExtraInfo: () => ["1.2.3.4", 1] } as any);
+  return conn;
+}
+
+const rtspResponse = (cseq: number, body: string) =>
+  Buffer.from(`RTSP/1.0 200 OK\r\nCSeq: ${cseq}\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
+
+test("late RTSP response is not delivered to next request", async () => {
+  const conn = fakeConnection();
+  await expect(
+    conn.sendAndReceive("POST", "/feedback", { protocol: "RTSP/1.0", timeout: 0.05, headers: { CSeq: 20 } }),
+  ).rejects.toThrow("no response");
+
+  const next = conn.sendAndReceive("GET", "/info", { protocol: "RTSP/1.0", timeout: 1, headers: { CSeq: 21 } });
+  conn.dataReceived(rtspResponse(20, "late"));
+  conn.dataReceived(rtspResponse(21, "info"));
+  const resp = await next;
+  expect(resp.headers.get("CSeq")).toBe("21");
+  expect(resp.body).toEqual("info");
+});
+
+test("RTSP responses are matched by CSeq when out of order", async () => {
+  const conn = fakeConnection();
+  const first = conn.sendAndReceive("GET", "/a", { protocol: "RTSP/1.0", timeout: 1, headers: { CSeq: 1 } });
+  const second = conn.sendAndReceive("GET", "/b", { protocol: "RTSP/1.0", timeout: 1, headers: { CSeq: 2 } });
+  conn.dataReceived(rtspResponse(2, "b"));
+  conn.dataReceived(rtspResponse(1, "a"));
+  expect((await first).body).toEqual("a");
+  expect((await second).body).toEqual("b");
+});
+
+test("late HTTP response is discarded instead of shifting responses", async () => {
+  const conn = fakeConnection();
+  await expect(conn.sendAndReceive("POST", "/pair-pin-start", { timeout: 0.05 })).rejects.toThrow("no response");
+
+  const next = conn.sendAndReceive("GET", "/info", { timeout: 1 });
+  conn.dataReceived(Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nlate"));
+  conn.dataReceived(Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\ninfo"));
+  expect((await next).body).toEqual("info");
+});
+
+// DIGEST AUTHENTICATION (password protected AirPlay receivers, pyatv #556)
+
+function digestServer(password: string, seen: Array<string | undefined>) {
+  return (request: HttpRequest): HttpResponse => {
+    const authorization = request.headers.get("Authorization");
+    seen.push(authorization);
+    const expected = getDigestPayload(request.method, request.path, "AirPlay", "airplay", password, "abc");
+    if (authorization === expected) return new HttpResponse("HTTP", "1.1", 200, "OK", new Map(), Buffer.from("ok"));
+    return new HttpResponse(
+      "HTTP",
+      "1.1",
+      401,
+      "Unauthorized",
+      new Map([["WWW-Authenticate", 'Digest realm="airplay", nonce="abc"']]),
+      Buffer.alloc(0),
+    );
+  };
+}
+
+test("connection with password retries with digest authentication", async () => {
+  const seen: Array<string | undefined> = [];
+  const [client, server] = await serveAndConnect(digestServer("secret", seen));
+  client.password = "secret";
+
+  expect((await client.get("/first")).code).toBe(200);
+  expect(seen.length).toBe(2);
+  expect(seen[0]).toBeUndefined();
+
+  // Following requests are authenticated directly
+  expect((await client.get("/second")).code).toBe(200);
+  expect(seen.length).toBe(3);
+  server.close();
+});
+
+test("connection with wrong password fails", async () => {
+  const seen: Array<string | undefined> = [];
+  const [client, server] = await serveAndConnect(digestServer("secret", seen));
+  client.password = "wrong";
+
+  await expect(client.get("/first")).rejects.toThrow(AuthenticationError);
+  expect(seen.length).toBe(2); // Only one retry
+  expect((await client.get("/again", true)).code).toBe(401);
+  server.close();
+});
+
+test("connection without password does not retry", async () => {
+  const seen: Array<string | undefined> = [];
+  const [client, server] = await serveAndConnect(digestServer("secret", seen));
+  await expect(client.get("/first")).rejects.toThrow(AuthenticationError);
+  expect(seen.length).toBe(1);
   server.close();
 });

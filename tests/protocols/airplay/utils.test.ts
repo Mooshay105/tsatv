@@ -70,6 +70,19 @@ test.each([
 });
 
 test.each([
+  [Protocol.AirPlay, { flags: "0xC4" }, PairingRequirement.Mandatory],
+  [Protocol.AirPlay, { pw: "true" }, PairingRequirement.Mandatory],
+  [Protocol.RAOP, { sf: "0xC4" }, PairingRequirement.NotNeeded],
+  [Protocol.AirPlay, { flags: "0x44" }, PairingRequirement.NotNeeded],
+] as Array<[Protocol, Record<string, string>, PairingRequirement]>)(
+  "getPairingRequirement with password %p %p",
+  (protocol, props, expectedReq) => {
+    const service = new MutableService("id", protocol, 0, props);
+    expect(getPairingRequirement(service)).toBe(expectedReq);
+  },
+);
+
+test.each([
   [{}, NO_CREDENTIALS, false],
   [{ model: "AudioAccessory1,2" }, NO_CREDENTIALS, false],
   [{ model: "AudioAccessory1,2" }, TRANSIENT_CREDENTIALS, true],
@@ -102,6 +115,22 @@ test.each([
   "getProtocolVersion %p %p",
   (props, preferredVersion, expectedVersion) => {
     const service = new MutableService("id", Protocol.AirPlay, 0, props);
+    expect(getProtocolVersion(service, preferredVersion)).toBe(expectedVersion);
+  },
+);
+
+const LEGACY_CREDENTIALS = "aabbccdd:00112233";
+const HAP_CREDENTIALS = "aa:bb:cc:dd";
+
+test.each([
+  [LEGACY_CREDENTIALS, AirPlayVersion.Auto, AirPlayMajorVersion.AirPlayV1],
+  [HAP_CREDENTIALS, AirPlayVersion.Auto, AirPlayMajorVersion.AirPlayV2],
+  [LEGACY_CREDENTIALS, AirPlayVersion.V2, AirPlayMajorVersion.AirPlayV2],
+  ["invalid", AirPlayVersion.Auto, AirPlayMajorVersion.AirPlayV2],
+] as Array<[string, AirPlayVersion, AirPlayMajorVersion]>)(
+  "getProtocolVersion with credentials %p %p",
+  (credentials, preferredVersion, expectedVersion) => {
+    const service = new MutableService("id", Protocol.RAOP, 0, { ft: "0x4A7FCA00,0xBC354BD0" }, credentials);
     expect(getProtocolVersion(service, preferredVersion)).toBe(expectedVersion);
   },
 );

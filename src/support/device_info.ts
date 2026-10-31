@@ -18,6 +18,7 @@ const MODEL_LIST: Record<string, DeviceModel> = {
   "AudioAccessory5,1": DeviceModel.HomePodMini,
   "AudioAccessorySingle5,1": DeviceModel.HomePodMini,
   "AudioAccessory6,1": DeviceModel.HomePodGen2,
+  "AudioAccessory11,1": DeviceModel.HomePodMiniGen2,
 };
 
 const INTERNAL_NAME_LIST: Record<string, DeviceModel> = {
@@ -138,7 +139,9 @@ export function lookupOs(idOrModel: string | DeviceModel): OperatingSystem {
   if ([DeviceModel.AirPortExpress, DeviceModel.AirPortExpressGen2].includes(idOrModel)) {
     return OperatingSystem.AirPortOS;
   }
-  if ([DeviceModel.HomePod, DeviceModel.HomePodMini, DeviceModel.HomePodGen2].includes(idOrModel)) {
+  if ([DeviceModel.HomePod, DeviceModel.HomePodMini, DeviceModel.HomePodGen2, DeviceModel.HomePodMiniGen2].includes(
+      idOrModel,
+    )) {
     return OperatingSystem.TvOS;
   }
   if ([DeviceModel.AppleTVGen1, DeviceModel.Gen2, DeviceModel.Gen3].includes(idOrModel)) {

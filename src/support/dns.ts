@@ -143,8 +143,15 @@ export function parseDomainName(buffer: BytesReader): string {
     }
     if (lengthFlags === 0b11) {
       const highBits = length & 0x3f;
-      const low = buffer.read(1)[0]!;
+      const low = buffer.read(1)[0];
+      if (low === undefined) throw new Error("truncated compression pointer");
+      const pointerPosition = buffer.tell() - 2;
       const newOffset = (highBits << 8) | low;
+      // Pointers must refer to an earlier position, otherwise a malformed (or
+      // malicious) packet can make us loop forever
+      if (newOffset >= pointerPosition) {
+        throw new Error(`invalid compression pointer ${newOffset} at ${pointerPosition}`);
+      }
       if (compressionOffset === null) {
         compressionOffset = buffer.tell();
       }
@@ -293,6 +300,9 @@ export class DnsQuestion {
 
 const KNOWN_TYPES = new Set<number>([QueryType.A, QueryType.PTR, QueryType.TXT, QueryType.SRV, QueryType.ANY]);
 
+/** Query type used for records of a known type whose data could not be parsed (raw data is kept). */
+export const UNPARSED_TYPE = -1;
+
 /** Represents a DNS resource record. */
 export class DnsResource {
   constructor(
@@ -308,14 +318,27 @@ export class DnsResource {
     const qname = parseDomainName(buffer);
     const [qtype, qclass, ttl, rdLength] = buffer.unpack(">2HIH") as [number, number, number, number];
     const beforeRd = buffer.tell();
+    if (beforeRd + rdLength > buffer.tell() + buffer.remaining) {
+      throw new Error("resource data exceeds message length");
+    }
     let rd: any;
     if (KNOWN_TYPES.has(qtype)) {
-      rd = parseRdata(qtype, buffer, rdLength);
+      try {
+        rd = parseRdata(qtype, buffer, rdLength);
+      } catch (ex) {
+        LOGGER.debug("Failed to parse resource data for %s (type %d): %s", qname, qtype, ex);
+        rd = null;
+      }
+      if (rd === null || buffer.tell() !== beforeRd + rdLength) {
+        // Keep the raw data for a record we could not parse instead of dropping the
+        // whole message (one odd record should not discard everything else)
+        if (rd !== null) LOGGER.debug("Resource data length mismatch for %s (type %d)", qname, qtype);
+        buffer.seek(beforeRd);
+        rd = buffer.read(rdLength);
+        return new DnsResource(qname, UNPARSED_TYPE, qclass, ttl, rdLength, rd);
+      }
     } else {
       rd = buffer.read(rdLength);
-    }
-    if (buffer.tell() !== beforeRd + rdLength) {
-      throw new Error("resource data length mismatch");
     }
     return new DnsResource(qname, qtype, qclass, ttl, rdLength, rd);
   }

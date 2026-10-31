@@ -2,18 +2,64 @@
 	"name": "tsatv",
 	"version": "0.18.0",
 	"description": "TypeScript (Bun) port of pyatv: a client library for Apple TV and AirPlay devices",
-	"module": "src/index.ts",
+	"keywords": [
+		"apple-tv",
+		"airplay",
+		"raop",
+		"mrp",
+		"companion",
+		"dmap",
+		"homepod",
+		"pyatv",
+		"bun"
+	],
+	"license": "MIT",
+	"author": "Malcolm Hauser",
+	"contributors": [
+		"Pierre Ståhl (original pyatv author)"
+	],
+	"homepage": "https://github.com/Mooshay105/pyatv-ts#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Mooshay105/pyatv-ts.git"
+	},
+	"bugs": {
+		"url": "https://github.com/Mooshay105/pyatv-ts/issues"
+	},
 	"type": "module",
-	"private": true,
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./*": {
+			"types": "./dist/*.d.ts",
+			"default": "./dist/*.js"
+		},
+		"./package.json": "./package.json"
+	},
 	"bin": {
-		"atvremote": "src/scripts/atvremote.ts",
-		"atvscript": "src/scripts/atvscript.ts",
-		"atvlog": "src/scripts/atvlog.ts",
-		"atvproxy": "src/scripts/atvproxy.ts"
+		"atvremote": "dist/scripts/atvremote.js",
+		"atvscript": "dist/scripts/atvscript.js",
+		"atvlog": "dist/scripts/atvlog.js",
+		"atvproxy": "dist/scripts/atvproxy.js"
+	},
+	"files": [
+		"dist",
+		"src",
+		"!dist/**/*.tsbuildinfo"
+	],
+	"engines": {
+		"bun": ">=1.2.0"
 	},
 	"scripts": {
+		"build": "bun scripts/build.ts",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit -p .",
+		"prepublishOnly": "bun run typecheck && bun test && bun run build",
 		"gen-protobuf": "bun scripts/gen_protobuf.ts",
 		"atvremote": "bun src/scripts/atvremote.ts",
 		"atvscript": "bun src/scripts/atvscript.ts",
@@ -21,9 +67,7 @@
 		"atvproxy": "bun src/scripts/atvproxy.ts"
 	},
 	"devDependencies": {
-		"@types/bun": "latest"
-	},
-	"peerDependencies": {
+		"@types/bun": "latest",
 		"typescript": "^7"
 	}
 }

@@ -12,6 +12,7 @@ const LOGGER = getLogger("pyatv.protocols.airplay.player");
 
 export const PLAY_RETRIES = 3;
 export const WAIT_RETRIES = 5;
+export const EVENT_WAIT_RETRIES = 30;
 
 /** Run a function with a timing server set up. */
 async function withTimingServer<T>(rtsp: RtspSession, fn: (server: TimingServer) => Promise<T>): Promise<T> {
@@ -34,30 +35,71 @@ export class AirPlayPlayer {
 
   /** Play media from an URL on the device. */
   async playUrl(url: string, position = 0): Promise<void> {
-    let retry = 0;
     await withTimingServer(this.rtsp, async (server) => {
-      while (retry < PLAY_RETRIES) {
-        LOGGER.debug("Starting to play %s", url);
+      try {
+        await this._playWithRetries(server, url, position);
+      } finally {
+        // Stop feedback task and event channel, otherwise they keep running after
+        // playback has ended (or failed)
+        this.streamProtocol.teardown();
+      }
+    });
+  }
 
-        const resp = await this.streamProtocol.playUrl(server.port, url, position);
+  private async _playWithRetries(server: TimingServer, url: string, position: number): Promise<void> {
+    let retry = 0;
+    while (retry < PLAY_RETRIES) {
+      LOGGER.debug("Starting to play %s", url);
 
-        // Sometimes AirPlay fails with "Internal Server Error", we apply a "lets try
-        // again"-approach to that
-        if (resp.code === 500) {
-          retry += 1;
-          LOGGER.debug("Failed to stream %s, retry %d of %d", url, retry, PLAY_RETRIES);
-          await sleep(1.0);
-          continue;
-        }
+      const resp = await this.streamProtocol.playUrl(server.port, url, position);
 
-        // TODO: Should be more fine-grained
-        if (resp.code >= 400 && resp.code < 600) throw new AuthenticationError(`status code: ${resp.code}`);
+      // Sometimes AirPlay fails with "Internal Server Error", we apply a "lets try
+      // again"-approach to that
+      if (resp.code === 500) {
+        retry += 1;
+        LOGGER.debug("Failed to stream %s, retry %d of %d", url, retry, PLAY_RETRIES);
+        await sleep(1.0);
+        continue;
+      }
 
+      // TODO: Should be more fine-grained
+      if (resp.code >= 400 && resp.code < 600) throw new AuthenticationError(`status code: ${resp.code}`);
+
+      if (this.streamProtocol.supportsPlaybackState) {
+        await this._waitForMediaToEndFromEvents();
+      } else {
         await this._waitForMediaToEnd();
+      }
+      return;
+    }
+    throw new PlaybackError("Max retries exceeded");
+  }
+
+  // Newer devices (tvOS 26+) reject GET /playback-info, so rely on playback state
+  // reported via the event channel instead (when supported by the stream protocol)
+  async _waitForMediaToEndFromEvents(): Promise<void> {
+    let attempts = EVENT_WAIT_RETRIES;
+    let videoStarted = false;
+    let state = this.streamProtocol.playbackState ?? null;
+
+    for (;;) {
+      const error = this.streamProtocol.playbackError;
+      if (error) throw new PlaybackError(error);
+
+      if (state === "playing") {
+        videoStarted = true;
+      } else if (videoStarted && (state === "idle" || state === "stopped")) {
+        LOGGER.debug("media playback ended");
         return;
       }
-      throw new PlaybackError("Max retries exceeded");
-    });
+
+      if (!videoStarted) {
+        if (attempts === 0) throw new PlaybackError("media playback did not start");
+        attempts -= 1;
+      }
+
+      state = await this.streamProtocol.waitForPlaybackStateChange!(state, 1.0);
+    }
   }
 
   // Poll playback-info to find out if something is playing. It might take some time
@@ -71,7 +113,7 @@ export class AirPlayPlayer {
       // stopping video via remote control. Handle this gracefully.
       let resp;
       try {
-        resp = await this.rtsp.connection.get("/playback-info");
+        resp = await this.rtsp.connection.get("/playback-info", true);
       } catch (ex) {
         if (ex instanceof ConnectionLostError || (ex instanceof Error && ex.message.includes("not connected"))) {
           LOGGER.debug("Connection was lost, assuming video playback stopped");
@@ -83,7 +125,11 @@ export class AirPlayPlayer {
       LOGGER.debug("Playback-info: %s", resp);
 
       let parsed: Record<string, any> = {};
-      if (resp.body && resp.body.length !== 0) {
+      if (resp.code >= 400) {
+        // Newer tvOS versions respond with "500 Internal Server Error" until the
+        // media has been loaded, so treat that as "not playing yet"
+        LOGGER.debug("Playback-info failed with code %d, media not loaded yet?", resp.code);
+      } else if (resp.body && resp.body.length !== 0) {
         parsed = decodeBplistFromBody(resp);
       } else {
         LOGGER.debug("Got playback-info response without content");

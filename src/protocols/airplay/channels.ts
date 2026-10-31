@@ -48,6 +48,29 @@ export abstract class BaseEventChannel extends AbstractHAPChannel {
 
 /** Connection used to handle the event channel. */
 export class EventChannel extends BaseEventChannel {
+  private _eventListener: ((event: Record<string, any>) => void) | null = null;
+
+  /** Set listener for decoded AirPlay event messages. */
+  setEventListener(listener: (event: Record<string, any>) => void): void {
+    this._eventListener = listener;
+  }
+
+  /** Decode an event message and pass it on to the event listener (if any). */
+  processEvent(request: HttpRequest): void {
+    let payload = decodePlistBody(request.body);
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return;
+
+    const params = payload.params;
+    const nestedPayload =
+      params !== null && typeof params === "object" && !Array.isArray(params) ? params.data : undefined;
+    if (nestedPayload !== undefined && nestedPayload !== null) payload = decodePlistBody(nestedPayload);
+
+    if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+      LOGGER.debug("Decoded event: %s", describeEvent(payload));
+      this._eventListener?.(payload);
+    }
+  }
+
   handleReceived(): void {
     while (this.buffer.length > 0) {
       try {
@@ -59,6 +82,8 @@ export class EventChannel extends BaseEventChannel {
         }
 
         LOGGER.debug("Got message on event channel: %s", request);
+
+        this.processEvent(request);
 
         // Send a positive response to satisfy the other end of the channel
         const headers: Record<string, string> = { "Content-Length": "0", "Audio-Latency": "0" };
@@ -74,6 +99,22 @@ export class EventChannel extends BaseEventChannel {
         break;
       }
     }
+  }
+}
+
+/** Return a compact JSON representation of an event (binary data is summarized). */
+function describeEvent(event: unknown): string {
+  try {
+    return JSON.stringify(event, (_key, value) => {
+      if (value instanceof Uint8Array) return `<${value.length} bytes>`;
+      if (value && typeof value === "object" && value.type === "Buffer" && Array.isArray(value.data)) {
+        return `<${value.data.length} bytes>`;
+      }
+      if (typeof value === "bigint") return value.toString();
+      return value;
+    });
+  } catch {
+    return String(event);
   }
 }
 

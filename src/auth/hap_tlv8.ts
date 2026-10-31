@@ -5,6 +5,8 @@
  * dicts. TLV data is represented as Map<number, Buffer> to preserve insertion order.
  */
 
+import { AuthenticationError } from "../exceptions.ts";
+
 /** Correspond to TLV values in HAP specification. */
 export enum TlvValue {
   // Standardized keys
@@ -146,4 +148,45 @@ export function stringify(data: TlvInput): string {
     }
   }
   return output.join(", ");
+}
+
+const ERROR_DESCRIPTIONS: Record<number, string> = {
+  [ErrorCode.Unknown]: "device reported an unknown pairing error",
+  [ErrorCode.Authentication]: "authentication failed (wrong PIN or credentials?)",
+  [ErrorCode.BackOff]: "too many failed attempts, try again later",
+  [ErrorCode.MaxPeers]: "device cannot be paired with any more controllers",
+  [ErrorCode.MaxTries]: "too many failed attempts, try again later (restarting the device may help)",
+  [ErrorCode.Unavailable]: "device is not accepting pairing requests right now",
+  [ErrorCode.Busy]: "device is busy with another pairing attempt, try again later",
+};
+
+/** Return a human readable description of an error in TLV data, or null if no error. */
+export function describeTlvError(data: TlvData): string | null {
+  const error = data.get(TlvValue.Error);
+  if (error === undefined) return null;
+
+  const code = leInt(error);
+  let description = ERROR_DESCRIPTIONS[code] ?? `device reported pairing error ${code}`;
+  const backOff = data.get(TlvValue.BackOff);
+  if (backOff !== undefined && backOff.length > 0) {
+    description = description.replace(", try again later", "");
+    description += `, try again in ${leInt(backOff)} seconds`;
+  }
+  return `${description} (${stringify(data)})`;
+}
+
+/** Throw AuthenticationError if TLV data contains an error. */
+export function checkTlvError(data: TlvData): TlvData {
+  const description = describeTlvError(data);
+  if (description !== null) throw new AuthenticationError(description);
+  return data;
+}
+
+/** Return value for a key in TLV data, throwing AuthenticationError if missing. */
+export function requireTlv(data: TlvData, key: TlvValue): Buffer {
+  const value = data.get(key);
+  if (value === undefined) {
+    throw new AuthenticationError(`${TlvValue[key] ?? key} missing in pairing response (${stringify(data)})`);
+  }
+  return value;
 }

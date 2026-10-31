@@ -124,7 +124,15 @@ export class CompanionProtocol extends StateProducer<CompanionProtocolListener> 
     this.sendOpack(frameType, data);
     const shared = new SharedData<unknown>();
     this._queues.set(identifier, shared);
-    const unpackedObject = await shared.wait(timeout);
+    let unpackedObject: unknown;
+    try {
+      unpackedObject = await shared.wait(timeout);
+    } finally {
+      // Free the context if no response was received (e.g. timeout), otherwise it is
+      // kept until the connection is closed. Only remove our own entry as the
+      // identifier might have been reused by now.
+      if (this._queues.get(identifier) === shared) this._queues.delete(identifier);
+    }
 
     if (!isDict(unpackedObject)) {
       throw new ProtocolError(`Received unexpected type: ${typeof unpackedObject}`);

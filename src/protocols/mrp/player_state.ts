@@ -8,6 +8,15 @@ const LOGGER = getLogger("pyatv.protocols.mrp.player_state");
 
 export const DEFAULT_PLAYER_ID = "MediaRemote-DefaultPlayer";
 
+// Seconds between 1970-01-01 and 2001-01-01 (cocoa reference date)
+export const COCOA_EPOCH_OFFSET = 978307200;
+
+/** Hooks used by MRP (replaceable in tests). */
+export const mrpHooks = {
+  /** Current time in seconds since epoch. */
+  now: (): number => Date.now() / 1000,
+};
+
 const isClose = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b));
 
 /** Represent what is currently playing on a device. */
@@ -90,8 +99,62 @@ export class PlayerState {
     return null;
   }
 
+  // Rate saved when position was frozen on pause (see _compensateForStaleTiming)
+  private _frozenPlaybackRate: number | null = null;
+
+  private _timing(): [unknown, unknown, unknown] {
+    return [this.metadataField("elapsedTime"), this.metadataField("elapsedTimeTimestamp"), this.metadataField("playbackRate")];
+  }
+
+  /**
+   * Keep position correct when playback state changes without updated timing.
+   *
+   * Some apps change between playing and paused without sending a new elapsed time.
+   * Position would then jump back to the old elapsed time when pausing and forward by
+   * the paused duration when resuming. Freeze the position when pausing and restart
+   * the clock when resuming.
+   */
+  private _compensateForStaleTiming(previousState: number | null, timingBefore: [unknown, unknown, unknown]): void {
+    const state = this._playbackState;
+    const metadata = this.metadata;
+    if (previousState === state || metadata === null) return;
+
+    const timingAfter = this._timing();
+    if (!timingAfter.every((value, i) => value === timingBefore[i])) {
+      // Device sent new timing, trust it
+      this._frozenPlaybackRate = null;
+      return;
+    }
+
+    const [elapsedTime, timestamp, rate] = timingAfter as [number | null, number | null, number | null];
+    if (!timestamp) return;
+
+    if (previousState === pb.PlaybackState.Playing && state === pb.PlaybackState.Paused) {
+      if (!rate) return; // Position is not extrapolated anyway
+      const now = mrpHooks.now() - COCOA_EPOCH_OFFSET;
+      metadata.elapsedTime = (elapsedTime ?? 0) + (now - timestamp) * rate;
+      metadata.elapsedTimeTimestamp = now;
+      metadata.playbackRate = 0;
+      this._frozenPlaybackRate = rate;
+      LOGGER.debug("Paused without new timing, freezing position at %f", metadata.elapsedTime);
+    } else if (previousState === pb.PlaybackState.Paused && state === pb.PlaybackState.Playing) {
+      if (this._frozenPlaybackRate === null) return;
+      metadata.elapsedTimeTimestamp = mrpHooks.now() - COCOA_EPOCH_OFFSET;
+      metadata.playbackRate = this._frozenPlaybackRate;
+      this._frozenPlaybackRate = null;
+      LOGGER.debug("Resumed without new timing, continuing from %f", elapsedTime);
+    }
+  }
+
   /** Update current state with new data from SetStateMessage. */
   handleSetState(setstate: pb.SetStateMessage): void {
+    const previousState = this._playbackState;
+    const timingBefore = this._timing();
+    this._applySetState(setstate);
+    this._compensateForStaleTiming(previousState, timingBefore);
+  }
+
+  private _applySetState(setstate: pb.SetStateMessage): void {
     if (setstate.hasField("playbackState")) this._playbackState = setstate.playbackState;
 
     if (setstate.hasField("supportedCommands")) {

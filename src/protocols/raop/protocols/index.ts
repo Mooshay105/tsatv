@@ -4,6 +4,7 @@ import { randomInt } from "node:crypto";
 import { type HapCredentials, NO_CREDENTIALS } from "../../../auth/hap_pairing.ts";
 import type { HttpResponse } from "../../../support/http.ts";
 import { getLogger } from "../../../support/logging.ts";
+import { AirPlayAudioFormat } from "../../../settings.ts";
 import { FRAMES_PER_PACKET } from "../../../support/rtsp.ts";
 import type { Address, DatagramProtocol, DatagramTransport } from "../../../support/transport.ts";
 import { TimingPacket } from "../packets.ts";
@@ -15,6 +16,9 @@ const LOGGER = getLogger("pyatv.protocols.raop.protocols");
 export class StreamContext {
   credentials: HapCredentials = NO_CREDENTIALS;
   password: string | null = null;
+
+  /** Audio format used by AirPlay 2 streams. */
+  audioFormat: AirPlayAudioFormat = AirPlayAudioFormat.ALAC;
 
   sampleRate = 44100;
   channels = 2;
@@ -81,6 +85,18 @@ export interface StreamProtocol {
 
   /** Play media from a URL. */
   playUrl(timingServerPort: number, url: string, position?: number): Promise<HttpResponse>;
+
+  /** Return whether playback state is reported by the stream. */
+  readonly supportsPlaybackState?: boolean;
+
+  /** Return playback state reported by the stream, if supported. */
+  readonly playbackState?: string | null;
+
+  /** Wait for playback state to change, if supported by the stream. */
+  waitForPlaybackStateChange?(previousState: string | null, timeout: number): Promise<string | null>;
+
+  /** Error reported by the receiver during playback (e.g. it could not load the URL). */
+  readonly playbackError?: string | null;
 }
 
 /** Basic timing server responding to timing requests. */

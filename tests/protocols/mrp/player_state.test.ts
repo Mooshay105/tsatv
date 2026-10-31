@@ -2,7 +2,7 @@
 
 import { beforeEach, expect, test } from "bun:test";
 import * as messages from "../../../src/protocols/mrp/messages.ts";
-import { PlayerStateManager } from "../../../src/protocols/mrp/player_state.ts";
+import { COCOA_EPOCH_OFFSET, mrpHooks, PlayerStateManager } from "../../../src/protocols/mrp/player_state.ts";
 import * as pb from "../../../src/protocols/mrp/protobuf/index.ts";
 import type { MrpProtocol } from "../../../src/protocols/mrp/protocol.ts";
 import { MrpProtocolMock } from "./protocol_mock.ts";
@@ -342,4 +342,72 @@ test("set default supported commands", async () => {
 
   expect(player.commandInfo(pb.Command.Play)).toBeTruthy();
   expect(l.callCount).toBe(2);
+});
+
+// --- Pause/resume without new timing (pyatv #1875, #1934) --------------------
+
+const NOW = 1_700_000_000;
+const COCOA_NOW = NOW - COCOA_EPOCH_OFFSET;
+
+function setState(playbackState: number, metadata: Record<string, unknown> | null = null): pb.ProtocolMessage {
+  const msg = setPath(messages.create(pb.SET_STATE_MESSAGE));
+  (pb.extractInner(msg) as pb.SetStateMessage).playbackState = playbackState;
+  if (metadata) addMetadataItem(msg, {}, metadata);
+  return msg;
+}
+
+async function withNow<T>(now: number, fn: () => Promise<T>): Promise<T> {
+  const original = mrpHooks.now;
+  mrpHooks.now = () => now;
+  try {
+    return await fn();
+  } finally {
+    mrpHooks.now = original;
+  }
+}
+
+test("pause without timing freezes position", async () => {
+  await protocolMock.inject(setNowPlayingClient(CLIENT_ID_1));
+  await protocolMock.inject(setPath(messages.create(pb.SET_NOW_PLAYING_PLAYER_MESSAGE)));
+  await protocolMock.inject(
+    setState(pb.PlaybackState.Playing, { elapsedTime: 10, elapsedTimeTimestamp: COCOA_NOW, playbackRate: 1 }),
+  );
+  await withNow(NOW + 30, () => protocolMock.inject(setState(pb.PlaybackState.Paused)));
+
+  const metadata = psm.playing.metadata!;
+  expect(metadata.elapsedTime).toBeCloseTo(40);
+  expect(metadata.playbackRate).toBe(0);
+  expect(metadata.elapsedTimeTimestamp).toBeCloseTo(COCOA_NOW + 30);
+});
+
+test("resume without timing continues from frozen position", async () => {
+  await protocolMock.inject(setNowPlayingClient(CLIENT_ID_1));
+  await protocolMock.inject(setPath(messages.create(pb.SET_NOW_PLAYING_PLAYER_MESSAGE)));
+  await protocolMock.inject(
+    setState(pb.PlaybackState.Playing, { elapsedTime: 10, elapsedTimeTimestamp: COCOA_NOW, playbackRate: 1 }),
+  );
+  await withNow(NOW + 30, () => protocolMock.inject(setState(pb.PlaybackState.Paused)));
+  await withNow(NOW + 150, () => protocolMock.inject(setState(pb.PlaybackState.Playing)));
+
+  const metadata = psm.playing.metadata!;
+  expect(metadata.elapsedTime).toBeCloseTo(40);
+  expect(metadata.playbackRate).toBe(1);
+  expect(metadata.elapsedTimeTimestamp).toBeCloseTo(COCOA_NOW + 150);
+});
+
+test("pause with new timing from device is not changed", async () => {
+  await protocolMock.inject(setNowPlayingClient(CLIENT_ID_1));
+  await protocolMock.inject(setPath(messages.create(pb.SET_NOW_PLAYING_PLAYER_MESSAGE)));
+  await protocolMock.inject(
+    setState(pb.PlaybackState.Playing, { elapsedTime: 10, elapsedTimeTimestamp: COCOA_NOW, playbackRate: 1 }),
+  );
+  await withNow(NOW + 30, () =>
+    protocolMock.inject(
+      setState(pb.PlaybackState.Paused, { elapsedTime: 38, elapsedTimeTimestamp: COCOA_NOW + 29, playbackRate: 0 }),
+    ),
+  );
+
+  const metadata = psm.playing.metadata!;
+  expect(metadata.elapsedTime).toBe(38);
+  expect(metadata.elapsedTimeTimestamp).toBe(COCOA_NOW + 29);
 });

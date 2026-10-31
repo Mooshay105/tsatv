@@ -7,15 +7,19 @@ const noop = () => undefined;
 /**
  * Base class for objects announcing state changes to a listener.
  *
- * The listener property returns a proxy that maintains a weak reference to the
- * listener object and allows calling functions in the listener. If no listener is
- * set or the weak reference has expired, a null-function (doing nothing) is returned
- * so that nothing happens. This makes it safe to call functions without having to
+ * The listener property returns a proxy that allows calling functions in the
+ * listener. If no listener is set, a null-function (doing nothing) is returned so
+ * that nothing happens. This makes it safe to call functions without having to
  * check if either a listener has been set at all or if the listener implements the
  * called function.
+ *
+ * Unlike pyatv (which uses a weakref), the listener is held by a normal reference:
+ * JavaScript has no reference counting so cycles are not a problem, and with a weak
+ * reference an inline listener (`atv.listener = { ... }`) would silently stop
+ * receiving updates whenever the garbage collector runs.
  */
 export class StateProducer<StateListener extends object = any> {
-  private _listenerRef: WeakRef<StateListener> | null = null;
+  private _listener: StateListener | null = null;
   maxCalls: number;
   callsMade = 0;
 
@@ -26,7 +30,7 @@ export class StateProducer<StateListener extends object = any> {
   /** Return current listener object (as a safe proxy). */
   get listener(): StateListener {
     const producerRef = new WeakRef(this);
-    const listenerRef = this._listenerRef;
+    const listenerObj = this._listener;
     return new Proxy({} as StateListener, {
       get: (_target, attr) => {
         const producer = producerRef.deref();
@@ -40,9 +44,9 @@ export class StateProducer<StateListener extends object = any> {
           }
         }
 
-        if (listenerRef !== null) {
-          const listener = listenerRef.deref() as any;
-          if (listener && attr in listener) {
+        if (listenerObj !== null) {
+          const listener = listenerObj as any;
+          if (attr in listener) {
             producer?.stateWasUpdated();
             const value = listener[attr];
             return typeof value === "function" ? value.bind(listener) : value;
@@ -61,12 +65,12 @@ export class StateProducer<StateListener extends object = any> {
 
   /** Change current listener object. Set to null to remove active listener. */
   set listener(target: StateListener | null | undefined) {
-    this._listenerRef = target ? new WeakRef(target) : null;
+    this._listener = target ?? null;
   }
 
   /** Return the actual listener object (not a proxy) or null. */
   get rawListener(): StateListener | null {
-    return this._listenerRef?.deref() ?? null;
+    return this._listener;
   }
 
   /** Call when state was updated. */

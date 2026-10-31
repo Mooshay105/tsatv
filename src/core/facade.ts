@@ -196,9 +196,53 @@ export class FacadeMetadata extends iface.Metadata implements RelayerHost<iface.
  *
  * This class holds a map from feature name to an instance handling that feature name.
  */
+// Interfaces each feature belongs to (corresponds to @feature in pyatv). Used to find
+// features that should be answered by a protocol that has taken over an interface.
+const RC = iface.RemoteControl;
+const FEATURE_INTERFACES = new Map<FeatureName, object[]>([
+  ...(
+    [
+      "Up", "Down", "Left", "Right", "Play", "PlayPause", "Pause", "Stop", "Next", "Previous", "Select", "Menu",
+      "Home", "HomeHold", "TopMenu", "Suspend", "WakeUp", "SkipForward", "SkipBackward", "SetPosition", "SetShuffle",
+      "SetRepeat", "ChannelUp", "ChannelDown", "Screensaver", "Guide", "ControlCenter",
+    ] as Array<keyof typeof FeatureName>
+  ).map((name): [FeatureName, object[]] => [FeatureName[name], [RC]]),
+  [FeatureName.VolumeUp, [RC, iface.Audio]],
+  [FeatureName.VolumeDown, [RC, iface.Audio]],
+  ...(
+    [
+      "Title", "Artist", "Album", "Genre", "TotalTime", "Position", "Shuffle", "Repeat", "SeriesName", "SeasonNumber",
+      "EpisodeNumber", "ContentIdentifier", "iTunesStoreIdentifier", "Artwork", "App",
+    ] as Array<keyof typeof FeatureName>
+  ).map((name): [FeatureName, object[]] => [FeatureName[name], [iface.Metadata]]),
+  [FeatureName.AppList, [iface.Apps]],
+  [FeatureName.LaunchApp, [iface.Apps]],
+  [FeatureName.AccountList, [iface.UserAccounts]],
+  [FeatureName.SwitchAccount, [iface.UserAccounts]],
+  [FeatureName.PushUpdates, [iface.PushUpdater]],
+  [FeatureName.PlayUrl, [iface.Stream]],
+  [FeatureName.StreamFile, [iface.Stream]],
+  [FeatureName.PowerState, [iface.Power]],
+  [FeatureName.TurnOn, [iface.Power]],
+  [FeatureName.TurnOff, [iface.Power]],
+  ...(
+    ["Volume", "SetVolume", "OutputDevices", "AddOutputDevices", "RemoveOutputDevices", "SetOutputDevices"] as Array<
+      keyof typeof FeatureName
+    >
+  ).map((name): [FeatureName, object[]] => [FeatureName[name], [iface.Audio]]),
+  ...(["TextFocusState", "TextGet", "TextClear", "TextAppend", "TextSet"] as Array<keyof typeof FeatureName>).map(
+    (name): [FeatureName, object[]] => [FeatureName[name], [iface.Keyboard]],
+  ),
+  ...(["Swipe", "TouchAction", "TouchClick"] as Array<keyof typeof FeatureName>).map(
+    (name): [FeatureName, object[]] => [FeatureName[name], [iface.TouchGestures]],
+  ),
+]);
+
 export class FacadeFeatures extends iface.Features implements RelayerHost<iface.Features> {
   readonly relayer = new Relayer<iface.Features>(iface.Features, DEFAULT_PRIORITIES);
   private readonly _featureMap = new Map<FeatureName, [Protocol, iface.Features]>();
+  // Interfaces currently taken over and by which protocol
+  private readonly _takeovers = new Map<object, Protocol>();
 
   constructor(private readonly _pushUpdaterRelay: RelayerHost) {
     super();
@@ -219,7 +263,36 @@ export class FacadeFeatures extends iface.Features implements RelayerHost<iface.
     }
   }
 
+  /** Register that a protocol has taken over interfaces. */
+  takeover(protocol: Protocol, interfaces: object[]): void {
+    for (const ifaceClass of interfaces) this._takeovers.set(ifaceClass, protocol);
+  }
+
+  /** Release interfaces taken over by a protocol. */
+  releaseTakeover(protocol: Protocol, interfaces: object[]): void {
+    for (const ifaceClass of interfaces) {
+      if (this._takeovers.get(ifaceClass) === protocol) this._takeovers.delete(ifaceClass);
+    }
+  }
+
+  // Return features instance of protocol that has taken over the interface a feature
+  // belongs to (if any)
+  private _takeoverInstance(featureName: FeatureName): iface.Features | null {
+    for (const ifaceClass of FEATURE_INTERFACES.get(featureName) ?? []) {
+      const protocol = this._takeovers.get(ifaceClass);
+      if (protocol === undefined) continue;
+      const instance = this.relayer.get(protocol);
+      if (instance) return instance;
+    }
+    return null;
+  }
+
   override getFeature(featureName: FeatureName): iface.FeatureInfo {
+    // A protocol that has taken over an interface handles all calls to it, so it must
+    // also be the one deciding the state of the features belonging to it
+    const takeoverInstance = this._takeoverInstance(featureName);
+    if (takeoverInstance) return takeoverInstance.getFeature(featureName);
+
     if (featureName === FeatureName.PushUpdates) {
       // Multiple protocols can register a push updater implementation, but only one
       // of them will ever be used (i.e. relaying is not done on method level). So if
@@ -663,6 +736,7 @@ export class FacadeAppleTV extends iface.AppleTV {
     const release = () => {
       LOGGER.debug("Release %s by %s", interfaces.length, Protocol[protocol]);
       for (const relayer of takenOver) relayer.release();
+      this._features.releaseTakeover(protocol, interfaces as object[]);
     };
 
     LOGGER.debug("Takeover %s by %s", interfaces.length, Protocol[protocol]);
@@ -678,6 +752,7 @@ export class FacadeAppleTV extends iface.AppleTV {
       }
       takenOver.push(host.relayer);
     }
+    this._features.takeover(protocol, interfaces as object[]);
 
     return release;
   }

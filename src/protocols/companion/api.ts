@@ -128,8 +128,11 @@ export class CompanionAPI extends MessageDispatcher<string, OpackDict> implement
     await this.systemInfo();
     await this._touchStart();
     await this._sessionStart();
-    await this._tvRcSessionStart();
+    // Text input must be started before the TV Remote Client session, otherwise
+    // keyboard focus events (_tiStarted/_tiStopped) are no longer delivered to us
+    // (regression in pyatv 0.17.0 when TVRCSessionStart was added, see pyatv #2853)
     await this._textInputStart();
+    await this._tvRcSessionStart();
 
     await this.subscribeEvent("_iMC");
   }
@@ -284,6 +287,9 @@ export class CompanionAPI extends MessageDispatcher<string, OpackDict> implement
     let y = startY;
     await this.hidEvent(Math.trunc(x), Math.trunc(y), TouchAction.Press);
     const sleepTime = TOUCHPAD_DELAY_MS / 1000;
+    // Without a delay between press and the first hold event, the device sometimes
+    // interprets the start of the gesture as movement in the opposite direction
+    await sleep(sleepTime);
     let currentTime = timeNs();
     while (currentTime < endTime) {
       const remaining = Number(endTime - currentTime);
@@ -295,7 +301,10 @@ export class CompanionAPI extends MessageDispatcher<string, OpackDict> implement
       await sleep(sleepTime);
       currentTime = timeNs();
     }
-    await this.hidEvent(endX, endY, TouchAction.Release);
+    // Release at the end position, clamped and rounded the same way as hold events
+    const releaseX = Math.trunc(Math.min(Math.max(endX, 0), TOUCHPAD_WIDTH));
+    const releaseY = Math.trunc(Math.min(Math.max(endY, 0), TOUCHPAD_HEIGHT));
+    await this.hidEvent(releaseX, releaseY, TouchAction.Release);
   }
 
   /** Generate a touch event to x,y coordinates (in range [0,1000]). */

@@ -1,7 +1,7 @@
 /** Manage announced AirPlay features. */
 
-import { AuthenticationType, type HapCredentials, TRANSIENT_CREDENTIALS } from "../../auth/hap_pairing.ts";
-import { PairingRequirement } from "../../const.ts";
+import { AuthenticationType, type HapCredentials, parseCredentials, TRANSIENT_CREDENTIALS } from "../../auth/hap_pairing.ts";
+import { PairingRequirement, Protocol } from "../../const.ts";
 import type { MutableService } from "../../core/index.ts";
 import type { BaseService } from "../../interface.ts";
 import { AirPlayVersion } from "../../settings.ts";
@@ -126,6 +126,10 @@ export function getPairingRequirement(service: BaseService): PairingRequirement 
   if (getFlags(service.properties) & (LEGACY_PAIRING_BIT | PIN_REQUIRED)) return PairingRequirement.Mandatory;
   // "Current User" not supported by pyatv
   if ((prop(service.properties, "act") ?? "0") === "2") return PairingRequirement.Unsupported;
+  // A password protected receiver (e.g. flags 0xC4) does not set the pairing bits even
+  // though AirPlay requires a one time pairing. RAOP authenticates with the password
+  // (digest) instead, so pairing is not needed there.
+  if (service.protocol === Protocol.AirPlay && isPasswordRequired(service)) return PairingRequirement.Mandatory;
   return PairingRequirement.NotNeeded;
 }
 
@@ -180,6 +184,10 @@ export function logResponse(logger: Logger, response: HttpResponse, messagePrefi
 /** Return major AirPlay version supported by a service. */
 export function getProtocolVersion(service: BaseService, preferredVersion: AirPlayVersion): AirPlayMajorVersion {
   if (preferredVersion === AirPlayVersion.Auto) {
+    // Legacy credentials cannot derive the encryption keys AirPlay 2 needs, so stick
+    // to AirPlay 1 when that is what we have (otherwise streaming always fails)
+    if (hasLegacyCredentials(service)) return AirPlayMajorVersion.AirPlayV1;
+
     let features = prop(service.properties, "ft");
     if (!features) features = prop(service.properties, "features") ?? "0x0";
     const parsed = parseFeatures(features);
@@ -193,6 +201,14 @@ export function getProtocolVersion(service: BaseService, preferredVersion: AirPl
   }
   if (preferredVersion === AirPlayVersion.V2) return AirPlayMajorVersion.AirPlayV2;
   return AirPlayMajorVersion.AirPlayV1;
+}
+
+function hasLegacyCredentials(service: BaseService): boolean {
+  try {
+    return parseCredentials(service.credentials).type === AuthenticationType.Legacy;
+  } catch {
+    return false;
+  }
 }
 
 /** Update AirPlay service according to that it supports. */

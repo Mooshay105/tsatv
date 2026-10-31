@@ -1,7 +1,12 @@
 /** Smoke test for atvscript. */
 
 import { expect, test } from "bun:test";
-import { Protocol } from "../../src/const.ts";
+import { PowerState, Protocol } from "../../src/const.ts";
+import { NotSupportedError } from "../../src/exceptions.ts";
+import { runCommand } from "../../src/scripts/atvscript.ts";
+import { CapturedIO, setIO } from "../../src/scripts/io.ts";
+import { Semaphore } from "../../src/support/asyncio.ts";
+import { pyJsonDumps } from "../../src/support/pyjson.ts";
 import { AIRPLAY_ID, DMAP_ID, IP_1, IP_2, MRP_ID, useScriptEnv } from "./shared.ts";
 
 const HASH = "ca496c14642c78af6dd4250191fe175f6dafd72b4c33bcbab43c454aae051da1";
@@ -83,4 +88,55 @@ test("mrp idle", async () => {
     itunes_store_identifier: null,
   });
   expect(exitCode).toBe(0);
+});
+
+// --- Unit tests for command handling ----------------------------------------
+
+function stubAtv(calls: string[]): any {
+  return {
+    audio: {
+      volumeUp: async () => void calls.push("audio.volumeUp"),
+      volumeDown: async () => void calls.push("audio.volumeDown"),
+      get outputDevices(): never {
+        throw new NotSupportedError("output_devices is not supported");
+      },
+      listener: null,
+    },
+    power: {
+      powerState: PowerState.On,
+      turnOn: async () => void calls.push("power.turnOn"),
+      turnOff: async () => void calls.push("power.turnOff"),
+      listener: null,
+    },
+    remoteControl: { volumeUp: async () => void calls.push("remoteControl.volumeUp") },
+    keyboard: { listener: null },
+    pushUpdater: { listener: null, start: () => calls.push("pushUpdater.start") },
+    listener: null,
+  };
+}
+
+test.each([
+  ["volume_up", "audio.volumeUp"],
+  ["volume_down", "audio.volumeDown"],
+  ["turn_on", "power.turnOn"],
+  ["turn_off", "power.turnOff"],
+])("command %s uses non-deprecated interface (pyatv #2782)", async (command, expectedCall) => {
+  const calls: string[] = [];
+  const result = await runCommand(stubAtv(calls), { command, output: pyJsonDumps }, new Semaphore(0));
+  expect(result.result).toBe("success");
+  expect(calls).toEqual([expectedCall]);
+});
+
+test("push updates without output devices support (pyatv #2396)", async () => {
+  const io = new CapturedIO("\n");
+  const previous = setIO(io);
+  try {
+    const calls: string[] = [];
+    const result = await runCommand(stubAtv(calls), { command: "push_updates", output: pyJsonDumps }, new Semaphore(0));
+    expect(result).toMatchObject({ result: "success", push_updates: "finished" });
+    expect(calls).toContain("pushUpdater.start");
+    expect(io.out).toContain('"power_state": "on"');
+  } finally {
+    setIO(previous);
+  }
 });

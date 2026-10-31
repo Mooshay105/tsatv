@@ -450,6 +450,41 @@ test("takeover and release", async () => {
   expect(audio.volume).toBeCloseTo(0.0);
 });
 
+class MultiFeatures extends Features {
+  constructor(readonly states: Map<FeatureName, FeatureState>) {
+    super();
+  }
+
+  override getFeature(featureName: FeatureName): FeatureInfo {
+    return new FeatureInfo(this.states.get(featureName) ?? FeatureState.Unsupported);
+  }
+}
+
+test("features consider takeover (pyatv #2081)", async () => {
+  const mrpStates = new Map([
+    [FeatureName.SetVolume, FeatureState.Available],
+    [FeatureName.Pause, FeatureState.Available],
+  ]);
+  const [, mrpSdg] = registerInterface(FeatureName.SetVolume, new MultiFeatures(mrpStates), Protocol.MRP);
+  mrpSdg.features.add(FeatureName.Pause);
+  registerInterface(
+    FeatureName.SetVolume,
+    new MultiFeatures(new Map([[FeatureName.SetVolume, FeatureState.Unavailable]])),
+    Protocol.RAOP,
+  );
+  await facadeDummy.connect();
+  const feat = facadeDummy.features;
+  expect(feat.getFeature(FeatureName.SetVolume).state).toBe(FeatureState.Available);
+
+  const takeoverRelease = facadeDummy.takeover(Protocol.RAOP, Audio);
+  expect(feat.getFeature(FeatureName.SetVolume).state).toBe(FeatureState.Unavailable);
+  // Pause belongs to RemoteControl, which has not been taken over
+  expect(feat.getFeature(FeatureName.Pause).state).toBe(FeatureState.Available);
+
+  takeoverRelease();
+  expect(feat.getFeature(FeatureName.SetVolume).state).toBe(FeatureState.Available);
+});
+
 function registerBasicInterfaces(protocol: Protocol): SetupDataGenerator {
   const [, sdg] = registerInterface(FeatureName.PlayUrl, new DummyFeatures(FeatureName.PlayUrl), protocol);
   sdg.interfaces.set(Audio, new DummyAudio(0.0));

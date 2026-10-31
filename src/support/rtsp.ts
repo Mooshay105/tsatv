@@ -5,11 +5,11 @@
  * and all). It is somewhat generalized to support both AirPlay 1 and 2.
  */
 
-import { createHash, randomBytes, randomInt } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import type { MediaMetadata } from "../interface.ts";
 import * as tags from "../protocols/dmap/tags.ts";
 import { Event, TimeoutError, waitFor } from "./asyncio.ts";
-import { decodeBplistFromBody, type HeadersInit, type HttpConnection, type HttpResponse } from "./http.ts";
+import { decodeBplistFromBody, getDigestPayload, type HeadersInit, type HttpConnection, type HttpResponse } from "./http.ts";
 import { getLogger } from "./logging.ts";
 import * as plistlib from "./plistlib.ts";
 
@@ -54,22 +54,7 @@ export interface DigestInfo {
   nonce: string;
 }
 
-const md5 = (text: string) => createHash("md5").update(text, "utf-8").digest("hex");
-
-/** Return the Authorization payload for Apples OAuth. */
-export function getDigestPayload(
-  method: string,
-  uri: string,
-  user: string,
-  realm: string,
-  pwd: string,
-  nonce: string,
-): string {
-  const ha1 = md5(`${user}:${realm}:${pwd}`);
-  const ha2 = md5(`${method}:${uri}`);
-  const diResponse = md5(`${ha1}:${nonce}:${ha2}`);
-  return `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${diResponse}"`;
-}
+export { getDigestPayload, parseDigestChallenge } from "./http.ts";
 
 /** Representation of an RTSP session. */
 export class RtspSession {

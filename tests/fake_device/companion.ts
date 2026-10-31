@@ -72,6 +72,8 @@ type Message = Record<string, any>;
 export class FakeCompanionState {
   flags: number = CompanionServiceFlags.EMPTY | CompanionServiceFlags.SYSTEM_STATUS_SUPPORTED;
   clients: FakeCompanionService[] = [];
+  /** Identifiers of received requests, in order. */
+  receivedCommands: string[] = [];
   private _systemStatus: SystemStatus = SystemStatus.Awake;
   activeApp: string | null = null;
   openUrl: string | null = null;
@@ -277,6 +279,7 @@ export class FakeCompanionService extends CompanionServerAuth implements Transpo
           if (!this.chacha) throw new Error("client has not authenticated");
 
           LOGGER.debug("Received OPACK: %s", unpacked);
+          this.state.receivedCommands.push(String(unpacked._i));
           const handler = this.handlers[String(unpacked._i).toLowerCase()];
           if (handler) handler(unpacked);
           else this.sendHandlerNotSupported(unpacked);

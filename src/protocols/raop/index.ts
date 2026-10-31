@@ -142,6 +142,10 @@ export class RaopPlaybackManager {
     const protocolVersion = getProtocolVersion(service, this.core.settings.protocols.raop.protocol_version);
     LOGGER.debug("Using AirPlay version %s", protocolVersion);
 
+    // AirPlay 1 authenticates with the password in ANNOUNCE, AirPlay 2 receivers send a
+    // digest challenge to the first RTSP request instead
+    if (protocolVersion !== AirPlayMajorVersion.AirPlayV1) this._connection.password = service.password ?? null;
+
     const protocol =
       protocolVersion === AirPlayMajorVersion.AirPlayV1
         ? new AirPlayV1(this._context, this._rtsp)
@@ -307,6 +311,7 @@ export class RaopStream extends Stream {
       const [client, context] = await this.playbackManager.setup(this.core.service);
       context.credentials = extractCredentials(this.core.service);
       context.password = this.core.service.password;
+      context.audioFormat = this.core.settings.protocols.raop.audio_format;
 
       client.listener = this.listener;
       await client.initialize(this.core.service.properties);

@@ -289,7 +289,13 @@ export class UnicastDnsSdClientProtocol implements DatagramProtocol {
       TRAFFIC_LEVEL,
     );
 
-    this.parser.addMessage(new DnsMessage().unpack(data));
+    // A response that cannot be decoded still counts as a response, otherwise we
+    // would wait for the full timeout even though the device has answered
+    try {
+      this.parser.addMessage(new DnsMessage().unpack(data));
+    } catch (ex) {
+      logBinary(LOGGER, `Failed to decode response from ${this.host} (${ex})`, { Data: data });
+    }
     this.receivedResponses += 1;
 
     if (this.receivedResponses === this.queries.length) {

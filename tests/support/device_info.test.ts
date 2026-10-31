@@ -5,6 +5,7 @@ import { lookupInternalName, lookupModel, lookupOs, lookupVersion } from "../../
 test.each([
   ["AppleTV6,2", DeviceModel.Gen4K],
   ["AudioAccessory5,1", DeviceModel.HomePodMini],
+  ["AudioAccessory11,1", DeviceModel.HomePodMiniGen2],
   ["bad_model", DeviceModel.Unknown],
 ])("lookup model %s", (modelStr, expected) => {
   expect(lookupModel(modelStr)).toBe(expected);
@@ -40,6 +41,7 @@ test.each([
   [DeviceModel.HomePod, OperatingSystem.TvOS],
   [DeviceModel.HomePodGen2, OperatingSystem.TvOS],
   [DeviceModel.HomePodMini, OperatingSystem.TvOS],
+  [DeviceModel.HomePodMiniGen2, OperatingSystem.TvOS],
   [DeviceModel.AppleTVGen1, OperatingSystem.Legacy],
   [DeviceModel.Gen2, OperatingSystem.Legacy],
   [DeviceModel.Gen3, OperatingSystem.Legacy],

@@ -54,7 +54,7 @@ import { registerProtocol } from "../index.ts";
 import { type AbstractMrpConnection, MrpConnection } from "./connection.ts";
 import * as messages from "./messages.ts";
 import { MrpPairingHandler } from "./pairing.ts";
-import { type PlayerState, PlayerStateManager } from "./player_state.ts";
+import { COCOA_EPOCH_OFFSET, mrpHooks, type PlayerState, PlayerStateManager } from "./player_state.ts";
 import * as pb from "./protobuf/index.ts";
 import { MrpProtocol } from "./protocol.ts";
 
@@ -134,14 +134,9 @@ const FIELD_FEATURES = new Map<FeatureName, string>([
 
 export const DELAY_BETWEEN_COMMANDS = 0.1;
 
-// Seconds between 1970-01-01 and 2001-01-01 (cocoa reference date)
-const COCOA_EPOCH_OFFSET = 978307200;
 
 /** Hooks replaceable in tests. */
-export const mrpHooks = {
-  /** Current time in seconds since epoch. */
-  now: (): number => Date.now() / 1000,
-};
+export { mrpHooks };
 
 const isClose = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b));
 
@@ -539,7 +534,7 @@ export class MrpPower extends Power {
 
   private _getCurrentPowerState(): PowerState {
     const latestDeviceInfo = this.deviceInfo ?? this.protocol.deviceInfo;
-    return MrpPower._getPowerState(latestDeviceInfo);
+    return powerStateFromDeviceInfo(latestDeviceInfo);
   }
 
   override get powerState(): PowerState {
@@ -569,7 +564,7 @@ export class MrpPower extends Power {
 
   private async _updatePowerState(message: pb.ProtocolMessage): Promise<void> {
     const oldState = this.powerState;
-    const newState = MrpPower._getPowerState(message);
+    const newState = powerStateFromDeviceInfo(message);
     this.deviceInfo = message;
 
     if (newState !== oldState) {
@@ -584,14 +579,24 @@ export class MrpPower extends Power {
       this._waiters.delete(newState);
     }
   }
+}
 
-  private static _getPowerState(deviceInfoMessage: pb.ProtocolMessage | null): PowerState {
-    if (deviceInfoMessage === null) return PowerState.Unknown;
-    const logicalDeviceCount = (pb.extractInner(deviceInfoMessage) as pb.DeviceInfoMessage).logicalDeviceCount;
-    if (logicalDeviceCount >= 1) return PowerState.On;
-    if (logicalDeviceCount === 0) return PowerState.Off;
-    return PowerState.Unknown;
+/** Return power state based on a DEVICE_INFO_MESSAGE. */
+export function powerStateFromDeviceInfo(deviceInfoMessage: pb.ProtocolMessage | null): PowerState {
+  if (deviceInfoMessage === null) return PowerState.Unknown;
+  const deviceInfo = pb.extractInner(deviceInfoMessage) as pb.DeviceInfoMessage;
+  const logicalDeviceCount = deviceInfo.logicalDeviceCount;
+  if (logicalDeviceCount >= 1) return PowerState.On;
+  if (logicalDeviceCount === 0) {
+    // The leader of a HomePod stereo pair always reports zero logical devices, even
+    // while playing. Treat an active AirPlay session or being the cluster leader as on.
+    if (deviceInfo.isAirplayActive) return PowerState.On;
+    if (deviceInfo.isClusterAware && deviceInfo.clusterLeaderID && deviceInfo.clusterLeaderID === deviceInfo.deviceUID) {
+      return PowerState.On;
+    }
+    return PowerState.Off;
   }
+  return PowerState.Unknown;
 }
 
 /** Implementation of API for handling push update from an Apple TV. */

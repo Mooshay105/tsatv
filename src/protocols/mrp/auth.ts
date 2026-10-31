@@ -2,7 +2,7 @@
 
 import type { HapCredentials, PairSetupProcedure, PairVerifyProcedure } from "../../auth/hap_pairing.ts";
 import type { SRPAuthHandler } from "../../auth/hap_srp.ts";
-import { readTlv, stringify, type TlvData, TlvValue } from "../../auth/hap_tlv8.ts";
+import { checkTlvError, readTlv, requireTlv, stringify, type TlvData, TlvValue } from "../../auth/hap_tlv8.ts";
 import { AuthenticationError } from "../../exceptions.ts";
 import { logBinary } from "../../support/index.ts";
 import { getLogger } from "../../support/logging.ts";
@@ -14,8 +14,7 @@ const LOGGER = getLogger("pyatv.protocols.mrp.auth");
 
 function getPairingData(resp: pb.ProtocolMessage): TlvData {
   const tlv = readTlv((pb.extractInner(resp) as pb.CryptoPairingMessage).pairingData);
-  if (tlv.has(TlvValue.Error)) throw new AuthenticationError(stringify(tlv));
-  return tlv;
+  return checkTlvError(tlv);
 }
 
 const byte = (value: number) => Buffer.from([value]);
@@ -46,8 +45,8 @@ export class MrpPairSetupProcedure implements PairSetupProcedure {
     const resp = await this.protocol.sendAndReceive(msg, false);
 
     const pairingData = getPairingData(resp);
-    this._atvSalt = pairingData.get(TlvValue.Salt)!;
-    this._atvPubKey = pairingData.get(TlvValue.PublicKey)!;
+    this._atvSalt = requireTlv(pairingData, TlvValue.Salt);
+    this._atvPubKey = requireTlv(pairingData, TlvValue.PublicKey);
   }
 
   /** Finish pairing process. */
@@ -79,7 +78,7 @@ export class MrpPairSetupProcedure implements PairSetupProcedure {
     resp = await this.protocol.sendAndReceive(msg, false);
 
     pairingData = getPairingData(resp);
-    encryptedData = pairingData.get(TlvValue.EncryptedData)!;
+    encryptedData = requireTlv(pairingData, TlvValue.EncryptedData);
 
     return this.srp.step4(encryptedData);
   }
@@ -105,8 +104,8 @@ export class MrpPairVerifyProcedure implements PairVerifyProcedure {
     );
     const resp = getPairingData(await this.protocol.sendAndReceive(msg, false));
 
-    const sessionPubKey = resp.get(TlvValue.PublicKey)!;
-    const encrypted = resp.get(TlvValue.EncryptedData)!;
+    const sessionPubKey = requireTlv(resp, TlvValue.PublicKey);
+    const encrypted = requireTlv(resp, TlvValue.EncryptedData);
     logBinary(LOGGER, "Device", { Public: this.credentials.ltpk, Encrypted: encrypted });
 
     const encryptedData = this.srp.verify1(this.credentials, sessionPubKey, encrypted);

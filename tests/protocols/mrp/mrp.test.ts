@@ -1,11 +1,14 @@
 /** Unit tests for pyatv.protocols.mrp. */
 
-import { expect, test } from "bun:test";
-import { OperatingSystem, PairingRequirement, Protocol } from "../../../src/const.ts";
+import { describe, expect, test } from "bun:test";
+import { OperatingSystem, PairingRequirement, PowerState, Protocol } from "../../../src/const.ts";
 import { MutableService } from "../../../src/core/index.ts";
 import type * as mdns from "../../../src/core/mdns.ts";
 import { DeviceInfo } from "../../../src/interface.ts";
-import { deviceInfo, scan, serviceInfo } from "../../../src/protocols/mrp/index.ts";
+import { deviceInfo, powerStateFromDeviceInfo, scan, serviceInfo } from "../../../src/protocols/mrp/index.ts";
+import * as messages from "../../../src/protocols/mrp/messages.ts";
+import * as pb from "../../../src/protocols/mrp/protobuf/index.ts";
+import { InfoSettings } from "../../../src/settings.ts";
 
 const MRP_SERVICE = "_mediaremotetv._tcp.local";
 
@@ -65,4 +68,36 @@ test("disabled service no pairing", async () => {
   const airplayService = new MutableService("id", Protocol.AirPlay, 0, { allowpairing: "no" });
   await serviceInfo(mrpService, new DeviceInfo({}), new Map([[Protocol.MRP, mrpService], [Protocol.AirPlay, airplayService]]));
   expect(mrpService.pairing).toBe(PairingRequirement.NotNeeded);
+});
+
+describe("power state from device info", () => {
+  const OWN_UID = "own-uid";
+
+  function deviceInfoMessage(fields: Partial<pb.DeviceInfoMessage>): pb.ProtocolMessage {
+    const msg = messages.deviceInformation(new InfoSettings(), OWN_UID);
+    const inner = pb.extractInner(msg) as pb.DeviceInfoMessage;
+    inner.deviceUID = OWN_UID;
+    Object.assign(inner, fields);
+    return msg;
+  }
+
+  test("no message", () => expect(powerStateFromDeviceInfo(null)).toBe(PowerState.Unknown));
+  test("logical devices", () => {
+    expect(powerStateFromDeviceInfo(deviceInfoMessage({ logicalDeviceCount: 1 }))).toBe(PowerState.On);
+  });
+  test("no logical devices", () => {
+    expect(powerStateFromDeviceInfo(deviceInfoMessage({ logicalDeviceCount: 0 }))).toBe(PowerState.Off);
+  });
+  test("stereo pair leader playing over AirPlay", () => {
+    const msg = deviceInfoMessage({ logicalDeviceCount: 0, isAirplayActive: true });
+    expect(powerStateFromDeviceInfo(msg)).toBe(PowerState.On);
+  });
+  test("stereo pair leader", () => {
+    const msg = deviceInfoMessage({ logicalDeviceCount: 0, isClusterAware: true, clusterLeaderID: OWN_UID });
+    expect(powerStateFromDeviceInfo(msg)).toBe(PowerState.On);
+  });
+  test("stereo pair member that is not leader", () => {
+    const msg = deviceInfoMessage({ logicalDeviceCount: 0, isClusterAware: true, clusterLeaderID: "other" });
+    expect(powerStateFromDeviceInfo(msg)).toBe(PowerState.Off);
+  });
 });

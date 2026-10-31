@@ -2,19 +2,27 @@
 
 import { setupChannel } from "../../../auth/hap_channel.ts";
 import type { PairVerifyProcedure } from "../../../auth/hap_pairing.ts";
-import { InvalidStateError } from "../../../exceptions.ts";
-import { createTask, sleep, type Task } from "../../../support/asyncio.ts";
+import { InvalidStateError, ProtocolError } from "../../../exceptions.ts";
+import { Event, createTask, sleep, type Task, TimeoutError, waitFor } from "../../../support/asyncio.ts";
 import { Chacha20Cipher8byteNonce } from "../../../support/chacha20.ts";
 import { Float } from "../../../support/float.ts";
 import { decodeBplistFromBody, type HttpResponse } from "../../../support/http.ts";
 import { getLogger } from "../../../support/logging.ts";
 import * as plistlib from "../../../support/plistlib.ts";
-import type { RtspSession } from "../../../support/rtsp.ts";
+import { HTTP_PROTOCOL, type RtspSession } from "../../../support/rtsp.ts";
 import type { DatagramTransport, Transport } from "../../../support/transport.ts";
 import { uuid4 } from "../../../support/uuid.ts";
 import { verifyConnection } from "../../airplay/auth/index.ts";
 import { EventChannel } from "../../airplay/channels.ts";
+import { AirPlayAudioFormat } from "../../../settings.ts";
+import { encodeUncompressedAlac } from "../alac.ts";
 import type { StreamContext, StreamProtocol } from "./index.ts";
+
+// Audio formats used in SETUP ("audioFormat" is a bitmask of supported formats)
+const AUDIO_FORMAT_PCM_44100_16_2 = 0x800;
+const AUDIO_FORMAT_ALAC_44100_16_2 = 0x40000;
+const COMPRESSION_TYPE_PCM = 1;
+const COMPRESSION_TYPE_ALAC = 2;
 
 const LOGGER = getLogger("pyatv.protocols.raop.protocols.airplayv2");
 
@@ -24,21 +32,29 @@ export const EVENTS_READ_INFO = "Events-Read-Encryption-Key";
 
 export const FEEDBACK_INTERVAL = 2.0; // Seconds
 
-const HEADERS = {
-  "User-Agent": "AirPlay/550.10",
-  "Content-Type": "application/x-apple-binary-plist",
-  "X-Apple-ProtocolVersion": "1",
-  "X-Apple-Session-ID": uuid4().toLowerCase(),
-  "X-Apple-Stream-ID": "1",
-};
+export const COMMAND_USER_AGENT = "AirPlay/870.14.1";
+export const REMOTE_CONTROL_CLIENT_TYPE = "A6B27562-B43A-4F2D-B75F-82391E250194";
+
+/** Generate a random, locally administered unicast MAC-style device id. */
+function randomSenderDeviceId(): string {
+  const bytes = Buffer.from(uuid4().replace(/-/g, "").slice(0, 12), "hex");
+  bytes[0] = (bytes[0]! & 0xfc) | 0x02;
+  return [...bytes].map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(":");
+}
 
 /** Stream protocol used for AirPlay v2 support. */
 export class AirPlayV2 implements StreamProtocol {
-  eventChannel: Transport | null = null;
+  eventTransport: Transport | null = null;
+  eventChannel: EventChannel | null = null;
   private _verifier: PairVerifyProcedure | null = null;
   private _cipher: Chacha20Cipher8byteNonce | null = null;
   private _feedbackTask: Task<void> | null = null;
-  readonly uuid = uuid4();
+  private _playbackState: string | null = null;
+  private _playbackStateChanged = new Event();
+  private _playbackError: string | null = null;
+  private readonly _sessionId = uuid4().toUpperCase();
+  private readonly _senderDeviceId = randomSenderDeviceId();
+  private _streamId: number | null = null;
 
   constructor(
     readonly context: StreamContext,
@@ -50,13 +66,14 @@ export class AirPlayV2 implements StreamProtocol {
 
     const setupResp = await this.rtsp.setup({
       body: {
-        deviceID: "AA:BB:CC:DD:EE:FF",
-        sessionUUID: uuid4().toUpperCase(),
+        deviceID: this._senderDeviceId,
+        sessionUUID: this._sessionId,
+        sessionCorrelationUUID: uuid4().toUpperCase(),
         timingPort: timingServerPort,
         timingProtocol: "NTP",
         isMultiSelectAirPlay: true,
         groupContainsGroupLeader: false,
-        macAddress: "AA:BB:CC:DD:EE:FF",
+        macAddress: this._senderDeviceId,
         model: "iPhone14,3",
         name: "pyatv",
         osBuildVersion: "20F66",
@@ -76,9 +93,10 @@ export class AirPlayV2 implements StreamProtocol {
     // with the port used for it. So do some retries here.
     let retries = 5;
     let transport: Transport | null = null;
+    let channel: EventChannel | null = null;
     while (transport === null) {
       try {
-        [transport] = await setupChannel(
+        [transport, channel] = await setupChannel(
           (out, inp) => new EventChannel(out, inp),
           this._verifier,
           this.rtsp.connection.remoteIp,
@@ -88,14 +106,46 @@ export class AirPlayV2 implements StreamProtocol {
           EVENTS_WRITE_INFO,
         );
       } catch (ex: any) {
-        if (ex?.code !== "ECONNREFUSED") throw ex;
+        // Python catches (ConnectionRefusedError, OSError), i.e. any socket error
+        if (typeof ex?.code !== "string") throw ex;
         retries -= 1;
         if (retries === 0) throw ex;
         LOGGER.debug("Connect failed, retrying");
         await sleep(1.0);
       }
     }
-    this.eventChannel = transport;
+    this.eventTransport = transport;
+    this.eventChannel = channel;
+    this.eventChannel!.setEventListener((event) => this._handleEvent(event));
+  }
+
+  private _handleEvent(event: Record<string, any>): void {
+    // The receiver did not load the URL itself and asks us to fetch it on its behalf
+    // (FCUP, meant for app specific URL schemes and keys). Seen on tvOS 26 when the
+    // URL was not reachable by the device (HTTP 403). Proxying media is not
+    // supported, so fail playback instead of waiting for it to start.
+    if (event.kind === "request" && event.type === "unhandledURL") {
+      const url = event.request?.FCUP_Response_URL ?? "unknown URL";
+      LOGGER.debug("Receiver asked sender to load %s (unhandledURL)", url);
+      this._playbackError =
+        `device could not load ${url} by itself and asked the sender to fetch it (unhandledURL), ` +
+        "which is not supported. Make sure the URL is reachable from the device";
+      this._playbackStateChanged.set();
+      return;
+    }
+
+    if (event.type !== "playbackState") return;
+
+    const params = event.params;
+    let state = params !== null && typeof params === "object" ? params.playbackState : undefined;
+    if (state === undefined || state === null) state = event.name;
+    if (typeof state === "string") {
+      const normalizedState = state.toLowerCase();
+      if (normalizedState !== this._playbackState) {
+        this._playbackState = normalizedState;
+        this._playbackStateChanged.set();
+      }
+    }
   }
 
   async setup(timingServerPort: number, controlClientPort: number): Promise<void> {
@@ -111,15 +161,17 @@ export class AirPlayV2 implements StreamProtocol {
     // For the sake of it, derive a key from event parameters.
     const [outKey] = this._verifier.encryptionKeys(EVENTS_SALT, EVENTS_WRITE_INFO, EVENTS_READ_INFO);
     const sharedSecret = outKey.subarray(0, 32);
+    const useAlac = this.context.audioFormat === AirPlayAudioFormat.ALAC;
+    LOGGER.debug("Setting up audio stream with format %s", this.context.audioFormat);
 
     const setupResp = await this.rtsp.setup({
       body: {
         streams: [
           {
-            audioFormat: 0x800,
+            audioFormat: useAlac ? AUDIO_FORMAT_ALAC_44100_16_2 : AUDIO_FORMAT_PCM_44100_16_2,
             audioMode: "default",
             controlPort: controlClientPort,
-            ct: 1, // Raw PCM
+            ct: useAlac ? COMPRESSION_TYPE_ALAC : COMPRESSION_TYPE_PCM,
             isMedia: true,
             latencyMax: 88200,
             latencyMin: 11025,
@@ -146,7 +198,8 @@ export class AirPlayV2 implements StreamProtocol {
   teardown(): void {
     this._feedbackTask?.cancel();
     this._feedbackTask = null;
-    this.eventChannel?.close();
+    this.eventTransport?.close();
+    this.eventTransport = null;
     this.eventChannel = null;
   }
 
@@ -172,13 +225,14 @@ export class AirPlayV2 implements StreamProtocol {
 
   async sendAudioPacket(transport: DatagramTransport, rtpHeader: Buffer, audio: Buffer): Promise<[number, Buffer]> {
     let nonce: Buffer = Buffer.alloc(0);
-    let payload = audio;
+    let payload =
+      this.context.audioFormat === AirPlayAudioFormat.ALAC ? encodeUncompressedAlac(audio, this.context.channels) : audio;
     if (this._cipher) {
       // Save the nonce that will be used by the next encrypt call as it is included in
       // the audio packet.
       nonce = this._cipher.outNonce;
       const aad = rtpHeader.subarray(4, 12);
-      payload = this._cipher.encrypt(audio, null, aad);
+      payload = this._cipher.encrypt(payload, null, aad);
     }
 
     // Only eight byte nonces are used for encryption
@@ -187,56 +241,104 @@ export class AirPlayV2 implements StreamProtocol {
     return [this.context.rtpseq, packet];
   }
 
-  async playUrl(timingServerPort: number, url: string, position = 0.0): Promise<HttpResponse> {
-    await this._setupBase(timingServerPort);
-    await this.startFeedback();
-    await this.rtsp.record();
+  private async _setupUrlStream(): Promise<void> {
+    const response = await this.rtsp.setup({
+      body: {
+        streams: [
+          {
+            clientUUID: uuid4().toUpperCase(),
+            clientTypeUUID: REMOTE_CONTROL_CLIENT_TYPE,
+            channelID: `${this._senderDeviceId}-RCS-1`,
+            controlType: 1,
+            type: 130,
+          },
+        ],
+      },
+    });
+    const payload = decodeBplistFromBody(response);
+    const streams = payload?.streams ?? [];
+    if (streams.length === 0 || streams[0]?.streamID === undefined) {
+      throw new ProtocolError("missing URL control stream in SETUP response");
+    }
+    this._streamId = Number(streams[0].streamID);
+  }
 
-    // Most fields are not needed here, but keeping them for reference
+  private async _sendUrlCommand(command: Record<string, unknown>): Promise<HttpResponse> {
+    if (this._streamId === null) throw new InvalidStateError("URL control stream not set up");
+
     const body = {
-      "Content-Location": url,
-      "Start-Position-Seconds": new Float(position),
-      uuid: this.uuid,
-      streamType: 1,
-      mediaType: "file",
-      mightSupportStorePastisKeyRequests: true,
-      playbackRestrictions: 0,
-      secureConnectionMs: 22,
-      volume: new Float(1.0),
-      infoMs: 122,
-      connectMs: 18,
-      authMs: 0,
-      bonjourMs: 0,
-      referenceRestrictions: 3,
-      SenderMACAddress: "AA:BB:CC:DD:EE:FF",
-      model: "iPhone14,3",
-      postAuthMs: 0,
-      clientBundleID: "dev.pyatv.GPU",
-      clientProcName: "dev.pyatv.GPU",
-      osBuildVersion: "20G1116",
-      rate: new Float(1.0),
+      params: { data: plistlib.dumps(command, { fmt: plistlib.FMT_BINARY, sortKeys: false }) },
     };
-
-    // Actually start the stream
-    const resp = await this.rtsp.connection.post("/play", {
-      headers: HEADERS,
-      body: plistlib.dumps(body, plistlib.FMT_BINARY),
+    return this.rtsp.exchange("POST", {
+      uri: "/command",
+      protocol: HTTP_PROTOCOL,
+      headers: {
+        "User-Agent": COMMAND_USER_AGENT,
+        "X-Apple-ProtocolVersion": "1",
+        "X-Apple-Session-ID": this._sessionId,
+        "X-Apple-StreamID": String(this._streamId),
+      },
+      body,
       allowError: true,
     });
+  }
 
-    // Most important command is "/rate" as that sets playback rate to 100% (will start
-    // paused otherwise).
-    await this.rtsp.exchange("PUT", { uri: "/setProperty?isInterestedInDateRange", body: { value: true } });
-    await this.rtsp.exchange("PUT", { uri: "/setProperty?actionAtItemEnd", body: { value: 0 } });
-    await this.rtsp.exchange("POST", { uri: "/rate?value=1.000000" });
-    await this.rtsp.exchange("PUT", {
-      uri: "/setProperty?forwardEndTime",
-      body: { value: { flags: 0, value: 0, epoch: 0, timescale: 0 } },
-    });
-    await this.rtsp.exchange("PUT", {
-      uri: "/setProperty?reverseEndTime",
-      body: { value: { flags: 0, value: 0, epoch: 0, timescale: 0 } },
-    });
-    return resp;
+  /** Play media from a URL. */
+  async playUrl(timingServerPort: number, url: string, position = 0.0): Promise<HttpResponse> {
+    this._playbackError = null;
+    if (this._verifier === null) {
+      await this._setupBase(timingServerPort);
+      await this.startFeedback();
+    }
+    await this.rtsp.info();
+    await this.rtsp.record();
+    await this._setupUrlStream();
+
+    const item = {
+      uuid: uuid4().toUpperCase(),
+      mediaType: "file",
+      "Content-Location": url,
+      "Start-Position-Seconds": new Float(position),
+    };
+    const commands: Array<Record<string, unknown>> = [
+      { type: "insertPlayQueueItem", item },
+      { type: "setProperty", value: true, property: "isInterestedInDateRange", item: { uuid: item.uuid } },
+      { type: "setProperty", value: 1, property: "actionAtItemEnd" },
+      { type: "setRate", rate: new Float(1.0) },
+    ];
+
+    let response: HttpResponse | null = null;
+    for (const command of commands) {
+      response = await this._sendUrlCommand(command);
+      if (response.code < 200 || response.code >= 300) return response;
+    }
+    return response!;
+  }
+
+  /** Return whether playback state is reported by this stream. */
+  get supportsPlaybackState(): boolean {
+    return true;
+  }
+
+  /** Return the latest playback state from the event channel. */
+  get playbackState(): string | null {
+    return this._playbackState;
+  }
+
+  /** Return error reported by the receiver during playback (if any). */
+  get playbackError(): string | null {
+    return this._playbackError;
+  }
+
+  /** Wait for the event channel to report a new playback state. */
+  async waitForPlaybackStateChange(previousState: string | null, timeout: number): Promise<string | null> {
+    this._playbackStateChanged.clear();
+    if (this._playbackState !== previousState) return this._playbackState;
+    try {
+      await waitFor(this._playbackStateChanged.wait(), timeout);
+    } catch (ex) {
+      if (!(ex instanceof TimeoutError)) throw ex;
+    }
+    return this._playbackState;
   }
 }

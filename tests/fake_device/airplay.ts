@@ -6,6 +6,7 @@ import type { Server } from "../../src/support/transport.ts";
 import { BasicHttpServer, HttpRequest, HttpResponse, httpServer } from "../../src/support/http.ts";
 import { getLogger } from "../../src/support/logging.ts";
 import * as plistlib from "../../src/support/plistlib.ts";
+import { getDigestPayload } from "../../src/support/rtsp.ts";
 import { simpleGet } from "../utils.ts";
 import { registerFake } from "./index.ts";
 import type { WebApp } from "./web.ts";
@@ -51,7 +52,12 @@ export class FakeAirPlayState {
   lastAirplayContent: Buffer | null = null;
   playCount = 0;
   injectedPlayFails = 0;
+  /** Password required by receiver (digest authentication), null if none. */
+  password: string | null = null;
 }
+
+const DIGEST_REALM = "airplay";
+const DIGEST_NONCE = "4a6f1bb7c3c1b4b8";
 
 const bodyOf = (request: HttpRequest): Buffer =>
   Buffer.isBuffer(request.body) ? request.body : Buffer.from(request.body, "utf-8");
@@ -83,7 +89,26 @@ export class FakeAirPlayService extends AirPlayServerAuth {
   }
 
   /** Handle AirPlay play requests. */
+  // Return a 401 response if password is required and request is not authenticated
+  private checkPassword(request: HttpRequest): HttpResponse | null {
+    if (this.state.password === null) return null;
+    const expected = getDigestPayload(
+      request.method,
+      request.path,
+      "AirPlay",
+      DIGEST_REALM,
+      this.state.password,
+      DIGEST_NONCE,
+    );
+    if (request.headers.get("Authorization") === expected) return null;
+    return response(request, 401, "Unauthorized", Buffer.alloc(0), {
+      "WWW-Authenticate": `Digest realm="${DIGEST_REALM}", nonce="${DIGEST_NONCE}"`,
+    });
+  }
+
   handleAirplayPlay(request: HttpRequest): HttpResponse | Promise<HttpResponse> {
+    const unauthorized = this.checkPassword(request);
+    if (unauthorized) return unauthorized;
     this.state.playCount += 1;
 
     if (this.state.alwaysAuthFail || !this.state.hasAuthenticated) {
@@ -116,6 +141,8 @@ export class FakeAirPlayService extends AirPlayServerAuth {
 
   /** Handle AirPlay playback-info requests. */
   handleAirplayPlaybackInfo(request: HttpRequest): HttpResponse {
+    const unauthorized = this.checkPassword(request);
+    if (unauthorized) return unauthorized;
     const resp = this.state.airplayResponses.pop() ?? {
       code: 200,
       content: plistlib.dumps({ readyToPlay: false, uuid: 123 }),

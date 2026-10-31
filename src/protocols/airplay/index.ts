@@ -123,6 +123,8 @@ export class AirPlayStream extends Stream {
     try {
       // Set up a new connection and wrap it with an AirPlay stream of correct version
       this._connection = await httpConnect(this.config.address, this.service.port);
+      // Password protected receivers answer with a digest challenge (pyatv #556)
+      this._connection.password = this.service.password ?? null;
       const rtsp = new RtspSession(this._connection);
       const streamProtocol = this.createAirplayProtocol(this.service, rtsp);
       const player = new AirPlayPlayer(rtsp, streamProtocol);
@@ -146,6 +148,7 @@ export class AirPlayStream extends Stream {
 
     const context = new StreamContext();
     context.credentials = parseCredentials(service.credentials);
+    context.password = service.password ?? null;
 
     if (getProtocolVersion(service, this.core.settings.protocols.raop.protocol_version) === AirPlayMajorVersion.AirPlayV1) {
       return new AirPlayV1(context, rtsp);
@@ -218,7 +221,13 @@ export async function serviceInfo(
 }
 
 function createMrpTunnelData(core: Core, credentials: HapCredentials): SetupData {
-  const session = new AP2Session(core.config.address, core.service.port, credentials, core.settings.info);
+  const session = new AP2Session(
+    core.config.address,
+    core.service.port,
+    credentials,
+    core.settings.info,
+    core.service.password ?? null,
+  );
 
   // A protocol requires its corresponding service to function, so add a dummy one if
   // we don't have one yet

@@ -117,10 +117,9 @@ export class AirPlayV1 implements StreamProtocol {
       "X-Apple-Session-ID": uuid4(),
     };
 
-    return this.rtsp.connection.post("/play", {
-      headers: HEADERS,
-      body: plistlib.dumps(body, plistlib.FMT_BINARY),
-      allowError: true,
-    });
+    // Password protected receivers answer with a digest challenge, this is handled by
+    // the connection when a password is set (see HttpConnection.password)
+    const payload = plistlib.dumps(body, plistlib.FMT_BINARY);
+    return this.rtsp.connection.post("/play", { headers: HEADERS, body: payload, allowError: true });
   }
 }

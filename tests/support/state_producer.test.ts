@@ -74,3 +74,24 @@ test("call state was updated after update with listener", () => {
   producer.listener.foo();
   expect(producer.stateWasUpdatedCalled).toBe(true);
 });
+
+test("inline listener is not garbage collected", async () => {
+  const producer = new StateProducer<DummyListener>();
+  const calls: string[] = [];
+  // No other reference to the listener object is kept (pyatv #2853 hardware test)
+  producer.listener = {
+    fooCalled: false,
+    fooCalls: 0,
+    barCalled: false,
+    foo() {
+      calls.push("foo");
+    },
+  } as unknown as DummyListener;
+
+  for (let i = 0; i < 3; i++) {
+    Bun.gc(true);
+    await Bun.sleep(1);
+  }
+  producer.listener.foo();
+  expect(calls).toEqual(["foo"]);
+});

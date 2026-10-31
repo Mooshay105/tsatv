@@ -11,16 +11,19 @@ and `atvproxy` are included too.
 There are no runtime dependencies. Everything (protobuf, OPACK, binary plist, SRP,
 ChaCha20-Poly1305, mDNS, RTSP, ...) is implemented using Bun/Node built-ins.
 
-## Getting started
+## Installation
 
 ```bash
-bun install
-bun test          # run test suite
-bun run typecheck # type check with tsc
+bun add tsatv
 ```
 
+tsatv requires [Bun](https://bun.com) (>= 1.2) at runtime; it uses Bun APIs such as
+`Bun.serve`, `Bun.listen` and `Bun.file` and does not run on Node.js.
+
+## Getting started
+
 ```ts
-import { connect, scan } from "./src/index.ts";
+import { connect, scan } from "tsatv";
 
 const atvs = await scan({ timeout: 5 });
 console.log(atvs.map(String).join("\n"));
@@ -37,8 +40,8 @@ try {
 Pairing works the same way as in pyatv:
 
 ```ts
-import { pair } from "./src/index.ts";
-import { Protocol } from "./src/const.ts";
+import { pair } from "tsatv";
+import { Protocol } from "tsatv";
 
 const pairing = await pair(config, Protocol.Companion);
 await pairing.begin();
@@ -49,6 +52,20 @@ await pairing.close();
 ```
 
 ## Scripts
+
+The scripts are installed as executables (`bunx atvremote ...`, or globally with
+`bun add -g tsatv`):
+
+```bash
+atvremote scan
+atvremote --id <identifier> playing
+atvremote --id <identifier> --protocol companion pair
+atvscript --id <identifier> push_updates
+atvlog -o log.html pyatv.log
+atvproxy mrp <credentials> <ip>
+```
+
+From a checkout of this repository, run them with `bun run`:
 
 ```bash
 bun run atvremote scan
@@ -96,6 +113,18 @@ The API follows pyatv closely but is adapted to TypeScript conventions:
 - `protos/` and `scripts/gen_protobuf.ts` – MRP protobuf definitions and the code
   generator producing `src/protocols/mrp/protobuf/index.ts` (`bun run gen-protobuf`)
 
+## Development
+
+```bash
+bun install
+bun test          # run test suite
+bun run typecheck # type check with tsc
+bun run build     # compile to dist/ (JS + type declarations)
+```
+
+`npm publish` (or `bun publish`) runs type checking, the test suite and the build
+automatically via `prepublishOnly`.
+
 ## Testing
 
 All of pyatv's tests are ported (1250+ tests) and run in a few seconds. The three tests
@@ -104,3 +133,8 @@ end-to-end tests for its MRP and Companion proxies. Its AirPlay proxy is unteste
 the fake AirPlay device only supports legacy (AirPlay 1) authentication.
 
 Set `PYATV_TEST_LOG=1` to print debug logs when running tests.
+
+## License
+
+MIT. tsatv is a port of [pyatv](https://github.com/postlund/pyatv) by Pierre Ståhl,
+also MIT licensed. See [LICENSE.md](LICENSE.md).

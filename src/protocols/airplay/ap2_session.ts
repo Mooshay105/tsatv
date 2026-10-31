@@ -44,12 +44,15 @@ export class AP2Session {
     private readonly _controlPort: number,
     private readonly _credentials: HapCredentials,
     private readonly _info: InfoSettings,
+    private readonly _password: string | null = null,
   ) {}
 
   /** Open connection to receiver. */
   async connect(): Promise<void> {
     LOGGER.debug("Setting up remote connection to %s:%d", this._address, this._controlPort);
     this.connection = await httpConnect(this._address, this._controlPort);
+    // Password protected receivers answer the first RTSP request with a digest challenge
+    this.connection.password = this._password;
     this.verifier = await verifyConnection(this._credentials, this.connection);
     this.rtsp = new RtspSession(this.connection);
   }

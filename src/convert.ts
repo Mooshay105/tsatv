@@ -95,6 +95,7 @@ export function modelStr(deviceModel: DeviceModel): string {
       [DeviceModel.Music, "Music/iTunes"],
       [DeviceModel.AppleTV4KGen3, "Apple TV 4K (gen 3)"],
       [DeviceModel.HomePodGen2, "HomePod (gen 2)"],
+      [DeviceModel.HomePodMiniGen2, "HomePod Mini (gen 2)"],
     ]),
     deviceModel,
     "Unknown",

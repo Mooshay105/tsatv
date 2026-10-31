@@ -335,6 +335,14 @@ test.each([
   },
 );
 
+test("text input is started before TV remote session (pyatv #2853)", async () => {
+  await companion.client();
+  const commands = companion.state.receivedCommands;
+  expect(commands).toContain("_tiStart");
+  expect(commands).toContain("TVRCSessionStart");
+  expect(commands.indexOf("_tiStart")).toBeLessThan(commands.indexOf("TVRCSessionStart"));
+});
+
 test("touch", async () => {
   const client = await companion.client();
   await client.touch.swipe(0, 0, 800, 800, 200);
@@ -357,4 +365,21 @@ test("touch hold", async () => {
   const client = await companion.client();
   await client.touch.click(InputAction.Hold);
   expect(companion.state.latestButton).toBe("select");
+});
+
+test("text input focus state listener is called", async () => {
+  const client = await companion.client();
+  const updates: Array<[KeyboardFocusState, KeyboardFocusState]> = [];
+  client.keyboard.listener = {
+    focusstateUpdate(oldState: KeyboardFocusState, newState: KeyboardFocusState) {
+      updates.push([oldState, newState]);
+    },
+  };
+
+  companion.usecase.setRtiFocusState(KeyboardFocusState.Unfocused);
+  await until(() => updates.length >= 1);
+  companion.usecase.setRtiFocusState(KeyboardFocusState.Focused);
+  await until(() => updates.length >= 2);
+
+  expect(updates.map(([, newState]) => newState)).toEqual([KeyboardFocusState.Unfocused, KeyboardFocusState.Focused]);
 });

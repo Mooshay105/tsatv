@@ -30,6 +30,14 @@ export enum AirPlayVersion {
   V2 = "2",
 }
 
+/** Audio format used when streaming audio with AirPlay 2. */
+export enum AirPlayAudioFormat {
+  /** Uncompressed ALAC frames (supported by all receivers). */
+  ALAC = "alac",
+  /** Raw PCM (not played by some receivers, e.g. Sonos). */
+  PCM = "pcm",
+}
+
 /** How MRP tunneling over AirPlay is handled. */
 export enum MrpTunnel {
   /** Automatically set up MRP tunnel if supported by remote device. */
@@ -180,6 +188,8 @@ export class RaopSettings extends Model {
   declare timing_port: number;
   /** Server side (UDP) port used by control server. Set to 0 to use random free port. */
   declare control_port: number;
+  /** Audio format used when streaming with AirPlay 2. */
+  declare audio_format: AirPlayAudioFormat;
 
   static readonly SCHEMA: Record<string, FieldSpec> = {
     identifier: optStr(),
@@ -191,6 +201,10 @@ export class RaopSettings extends Model {
     },
     timing_port: int(0),
     control_port: int(0),
+    audio_format: {
+      type: { kind: "enum", name: "AirPlayAudioFormat", values: Object.values(AirPlayAudioFormat) },
+      default: () => AirPlayAudioFormat.ALAC,
+    },
   };
 
   constructor(data?: Record<string, unknown>) {

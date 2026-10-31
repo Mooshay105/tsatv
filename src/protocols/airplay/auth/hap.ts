@@ -2,7 +2,7 @@
 
 import type { HapCredentials, PairSetupProcedure, PairVerifyProcedure } from "../../../auth/hap_pairing.ts";
 import type { SRPAuthHandler } from "../../../auth/hap_srp.ts";
-import { readTlv, type TlvData, TlvValue, writeTlv } from "../../../auth/hap_tlv8.ts";
+import { checkTlvError, readTlv, requireTlv, type TlvData, TlvValue, writeTlv } from "../../../auth/hap_tlv8.ts";
 import { InvalidResponseError } from "../../../exceptions.ts";
 import type { HttpConnection, HttpResponse } from "../../../support/http.ts";
 import { logBinary } from "../../../support/index.ts";
@@ -21,7 +21,7 @@ const byte = (value: number) => Buffer.from([value]);
 
 export function getPairingData(resp: HttpResponse): TlvData {
   if (!Buffer.isBuffer(resp.body)) throw new InvalidResponseError(`got unexpected response: ${resp.body}`);
-  return readTlv(resp.body);
+  return checkTlvError(readTlv(resp.body));
 }
 
 /** Authenticate a device for AirPlay playback. */
@@ -45,8 +45,8 @@ export class AirPlayHapPairSetupProcedure implements PairSetupProcedure {
     ]);
     const resp = await this.http.post("/pair-setup", { body: writeTlv(data), headers: AIRPLAY_HEADERS });
     const pairingData = getPairingData(resp);
-    this._atvSalt = pairingData.get(TlvValue.Salt)!;
-    this._atvPubKey = pairingData.get(TlvValue.PublicKey)!;
+    this._atvSalt = requireTlv(pairingData, TlvValue.Salt);
+    this._atvPubKey = requireTlv(pairingData, TlvValue.PublicKey);
   }
 
   /** Finish authentication process. */
@@ -75,7 +75,7 @@ export class AirPlayHapPairSetupProcedure implements PairSetupProcedure {
       headers: AIRPLAY_HEADERS,
     });
     const pairingData = getPairingData(resp);
-    return this.srp.step4(pairingData.get(TlvValue.EncryptedData)!);
+    return this.srp.step4(requireTlv(pairingData, TlvValue.EncryptedData));
   }
 }
 
@@ -99,8 +99,8 @@ export class AirPlayHapPairVerifyProcedure implements PairVerifyProcedure {
     );
 
     const pairingData = getPairingData(resp);
-    const sessionPubKey = pairingData.get(TlvValue.PublicKey)!;
-    const encrypted = pairingData.get(TlvValue.EncryptedData)!;
+    const sessionPubKey = requireTlv(pairingData, TlvValue.PublicKey);
+    const encrypted = requireTlv(pairingData, TlvValue.EncryptedData);
     logBinary(LOGGER, "Device", { Public: this.credentials.ltpk, Encrypted: encrypted });
 
     const encryptedData = this.srp.verify1(this.credentials, sessionPubKey, encrypted);

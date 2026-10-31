@@ -1004,7 +1004,11 @@ export class DeviceInfo {
     if ([DeviceModel.AirPortExpress, DeviceModel.AirPortExpressGen2].includes(this.model)) {
       return OperatingSystem.AirPortOS;
     }
-    if ([DeviceModel.HomePod, DeviceModel.HomePodMini].includes(this.model)) {
+    if (
+      [DeviceModel.HomePod, DeviceModel.HomePodMini, DeviceModel.HomePodGen2, DeviceModel.HomePodMiniGen2].includes(
+        this.model,
+      )
+    ) {
       return OperatingSystem.TvOS;
     }
     if (

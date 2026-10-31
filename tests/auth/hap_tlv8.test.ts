@@ -1,7 +1,17 @@
 /** Unit tests for pyatv.auth.hap_tlv8. */
 
-import { expect, test } from "bun:test";
-import { readTlv, stringify, TlvValue, writeTlv } from "../../src/auth/hap_tlv8.ts";
+import { describe, expect, test } from "bun:test";
+import {
+  checkTlvError,
+  describeTlvError,
+  ErrorCode,
+  readTlv,
+  requireTlv,
+  stringify,
+  TlvValue,
+  writeTlv,
+} from "../../src/auth/hap_tlv8.ts";
+import { AuthenticationError } from "../../src/exceptions.ts";
 import { b } from "../utils.ts";
 
 const SINGLE_KEY_IN = new Map([[10, b("123")]]);
@@ -87,4 +97,39 @@ test("stringify unknown values", () => {
       ]),
     ),
   ).toBe("Method=0xaa, SeqNo=0xab, Error=0xac, 0xad=3bytes");
+});
+
+describe("pairing errors", () => {
+  const tlv = (entries: Array<[number, number[]]>) => new Map(entries.map(([k, v]) => [k, Buffer.from(v)]));
+
+  test("no error", () => {
+    const data = tlv([[TlvValue.Salt, [1, 2]]]);
+    expect(describeTlvError(data)).toBeNull();
+    expect(checkTlvError(data)).toBe(data);
+  });
+
+  test("back off with delay", () => {
+    const data = tlv([
+      [TlvValue.SeqNo, [2]],
+      [TlvValue.Error, [ErrorCode.BackOff]],
+      [TlvValue.BackOff, [30]],
+    ]);
+    expect(describeTlvError(data)).toStartWith("too many failed attempts, try again in 30 seconds");
+    expect(() => checkTlvError(data)).toThrow(AuthenticationError);
+  });
+
+  test("max tries", () => {
+    const data = tlv([[TlvValue.Error, [ErrorCode.MaxTries]]]);
+    expect(() => checkTlvError(data)).toThrow("too many failed attempts");
+  });
+
+  test("unknown error code", () => {
+    expect(describeTlvError(tlv([[TlvValue.Error, [0x42]]]))).toStartWith("device reported pairing error 66");
+  });
+
+  test("missing value", () => {
+    const data = tlv([[TlvValue.SeqNo, [2]]]);
+    expect(() => requireTlv(data, TlvValue.Salt)).toThrow("Salt missing in pairing response");
+    expect(requireTlv(tlv([[TlvValue.Salt, [7]]]), TlvValue.Salt)).toEqual(Buffer.from([7]));
+  });
 });

@@ -135,6 +135,8 @@ export enum DeviceModel {
   HomePodGen2 = 12,
   /** Device model is first generation Apple TV. */
   AppleTVGen1 = 13,
+  /** Device model is HomePod Mini (second generation). */
+  HomePodMiniGen2 = 14,
 }
 
 /** Type of input when pressing a button. */

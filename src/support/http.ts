@@ -1,5 +1,6 @@
 /** Module for working with HTTP requests. */
 
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { VERSION } from "../const.ts";
 import { AuthenticationError, ConnectionLostError, HttpError, ProtocolError } from "../exceptions.ts";
@@ -23,6 +24,35 @@ export const DEFAULT_TIMEOUT = 25.0; // Seconds
 export type DataProcessor = (data: Buffer) => Buffer;
 
 const nullProcessor: DataProcessor = (data) => data;
+
+// Username used for digest authentication with password protected AirPlay receivers
+export const DIGEST_USERNAME = "AirPlay";
+
+/** Parse realm and nonce from a WWW-Authenticate digest challenge. */
+export function parseDigestChallenge(wwwAuthenticate: string): { realm: string; nonce: string } | null {
+  const realm = /realm="([^"]*)"/i.exec(wwwAuthenticate)?.[1];
+  const nonce = /nonce="([^"]*)"/i.exec(wwwAuthenticate)?.[1];
+  if (realm === undefined || nonce === undefined) return null;
+  return { realm, nonce };
+}
+
+const md5 = (text: string) => createHash("md5").update(text, "utf-8").digest("hex");
+
+/** Return the Authorization payload for Apples OAuth. */
+export function getDigestPayload(
+  method: string,
+  uri: string,
+  user: string,
+  realm: string,
+  pwd: string,
+  nonce: string,
+): string {
+  const ha1 = md5(`${user}:${realm}:${pwd}`);
+  const ha2 = md5(`${method}:${uri}`);
+  const diResponse = md5(`${ha1}:${nonce}:${ha2}`);
+  return `Digest username="${user}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${diResponse}"`;
+}
+
 
 export type HeaderValue = string | number | boolean | bigint;
 export type HeadersInit = Record<string, HeaderValue> | Map<string, HeaderValue> | HttpHeaders | null | undefined;
@@ -423,7 +453,17 @@ interface PendingRequest {
   event: Event;
   response: HttpResponse | null;
   connectionClosed: boolean;
+  /** CSeq of the request (RTSP), used to match the response. */
+  cseq: string | null;
+  /** Time (ms) when the request timed out, null if still waiting. */
+  timedOutAt: number | null;
 }
+
+/**
+ * How long (ms) a timed out request is kept as a placeholder, so that a late response
+ * to it is discarded instead of being delivered to the next request.
+ */
+export const TIMED_OUT_REQUEST_LIFETIME_MS = 60_000;
 
 /** Representation of a HTTP connection. */
 export class HttpConnection implements Protocol {
@@ -434,6 +474,20 @@ export class HttpConnection implements Protocol {
   private _remoteIp: string | null = null;
   private _requests: PendingRequest[] = [];
   private _buffer: Buffer = Buffer.alloc(0);
+
+  /**
+   * Optional provider of an Authorization header value, added to every request that
+   * does not already have one (e.g. digest authentication for password protected
+   * AirPlay receivers).
+   */
+  authorizationProvider: ((method: string, uri: string) => string) | null = null;
+
+  /**
+   * Password for password protected AirPlay receivers. When set and the receiver
+   * answers a request with a digest challenge (401), digest authentication is set up
+   * (see authorizationProvider) and the request is sent again.
+   */
+  password: string | null = null;
 
   constructor(receiveProcessor?: DataProcessor | null, sendProcessor?: DataProcessor | null) {
     this.receiveProcessor = receiveProcessor ?? nullProcessor;
@@ -482,15 +536,37 @@ export class HttpConnection implements Protocol {
         break;
       }
 
-      // Dispatch message to first receiver
-      const pending = this._requests.pop();
-      if (pending) {
+      const pending = this._takePendingRequest(parsed);
+      if (!pending) {
+        LOGGER.warning("Got response without having a request: %s", parsed);
+      } else if (pending.timedOutAt !== null) {
+        LOGGER.debug("Discarding late response to timed out request: %s", parsed);
+      } else {
         pending.response = parsed;
         pending.event.set();
-      } else {
-        LOGGER.warning("Got response without having a request: %s", parsed);
       }
     }
+  }
+
+  // Find (and remove) the request a response belongs to. Responses with a CSeq (RTSP)
+  // are matched on that, other responses go to the oldest request (HTTP/1.1 responses
+  // arrive in request order).
+  private _takePendingRequest(response: HttpResponse): PendingRequest | undefined {
+    const now = Date.now();
+    this._requests = this._requests.filter(
+      (pending) => pending.timedOutAt === null || now - pending.timedOutAt < TIMED_OUT_REQUEST_LIFETIME_MS,
+    );
+
+    const cseq = response.headers.get("CSeq")?.trim();
+    if (cseq !== undefined) {
+      const idx = this._requests.findIndex((pending) => pending.cseq === cseq);
+      if (idx >= 0) return this._requests.splice(idx, 1)[0];
+      // Device answered with a CSeq we did not send, fall back to request order but
+      // never hand it to a request that expects another CSeq
+      const fallback = this._requests.findLastIndex((pending) => pending.cseq === null);
+      return fallback >= 0 ? this._requests.splice(fallback, 1)[0] : undefined;
+    }
+    return this._requests.pop();
   }
 
   errorReceived(exc: unknown): void {
@@ -534,14 +610,45 @@ export class HttpConnection implements Protocol {
       timeout?: number;
     } = {},
   ): Promise<HttpResponse> {
-    const protocol = options.protocol ?? "HTTP/1.1";
+    const password = this.password;
+    if (!password) return this._sendAndReceiveOnce(method, uri, options);
+
+    const response = await this._sendAndReceiveOnce(method, uri, { ...options, allowError: true });
+    const digest = response.code === 401 ? parseDigestChallenge(response.headers.get("WWW-Authenticate") ?? "") : null;
+    if (digest === null) return this._checkResponse(method, protocolOf(options), response, options.allowError);
+
+    LOGGER.debug("Receiver requires password, retrying %s %s with digest authentication", method, uri);
+    this.authorizationProvider = (m, u) => getDigestPayload(m, u, DIGEST_USERNAME, digest.realm, password, digest.nonce);
+    const headers = new HttpHeaders(options.headers);
+    headers.delete("Authorization");
+    return this._sendAndReceiveOnce(method, uri, { ...options, headers });
+  }
+
+  private async _sendAndReceiveOnce(
+    method: string,
+    uri: string,
+    options: {
+      protocol?: string;
+      userAgent?: string;
+      contentType?: string | null;
+      headers?: HeadersInit;
+      body?: string | Uint8Array | null;
+      allowError?: boolean;
+      timeout?: number;
+    } = {},
+  ): Promise<HttpResponse> {
+    const protocol = protocolOf(options);
+    const headers = new HttpHeaders(options.headers);
+    if (this.authorizationProvider && !headers.has("Authorization")) {
+      headers.set("Authorization", this.authorizationProvider(method, uri));
+    }
     const output = formatMessage(
       method,
       uri,
       protocol,
       options.userAgent ?? USER_AGENT,
       options.contentType ?? null,
-      options.headers,
+      headers,
       options.body ?? null,
     );
 
@@ -550,7 +657,13 @@ export class HttpConnection implements Protocol {
 
     this.transport.write(this.sendProcessor(output));
 
-    const pending: PendingRequest = { event: new Event(), response: null, connectionClosed: false };
+    const pending: PendingRequest = {
+      event: new Event(),
+      response: null,
+      connectionClosed: false,
+      cseq: headers.get("CSeq")?.trim() ?? null,
+      timedOutAt: null,
+    };
     this._requests.unshift(pending);
     let response: HttpResponse;
     try {
@@ -558,6 +671,9 @@ export class HttpConnection implements Protocol {
         await waitFor(pending.event.wait(), options.timeout ?? 10);
       } catch (ex) {
         if (ex instanceof TimeoutError) {
+          // Keep the request in the queue as a placeholder: if the response arrives
+          // late it is discarded instead of being delivered to the next request
+          pending.timedOutAt = Date.now();
           throw new TimeoutError(`no response to ${method} ${uri} (${protocol})`);
         }
         throw ex;
@@ -567,29 +683,40 @@ export class HttpConnection implements Protocol {
       if (pending.response === null) throw new Error("did not get a response");
       response = pending.response;
     } finally {
-      // If request failed and event is still in request queue, remove it
-      const idx = this._requests.indexOf(pending);
-      if (idx >= 0) this._requests.splice(idx, 1);
+      // If request failed and event is still in request queue, remove it (unless it is
+      // kept as a placeholder for a timed out request)
+      if (pending.timedOutAt === null) {
+        const idx = this._requests.indexOf(pending);
+        if (idx >= 0) this._requests.splice(idx, 1);
+      }
     }
 
     LOGGER.debug("Got %s response: %s:", response.protocol, response);
+    return this._checkResponse(method, protocol, response, options.allowError);
+  }
 
+  /** Return response if it is positive (or errors are allowed), otherwise throw. */
+  private _checkResponse(method: string, protocol: string, response: HttpResponse, allowError = false): HttpResponse {
     if (response.code === 403) throw new AuthenticationError("not authenticated");
 
     // Password required
     if (response.code === 401) {
-      if (options.allowError) return response;
+      if (allowError) return response;
       throw new AuthenticationError("not authenticated");
     }
 
     // Positive response
-    if ((response.code >= 200 && response.code < 300) || options.allowError) return response;
+    if ((response.code >= 200 && response.code < 300) || allowError) return response;
 
     throw new HttpError(
       `${protocol} method ${method} failed with code ${response.code}: ${response.message}`,
       response.code,
     );
   }
+}
+
+function protocolOf(options: { protocol?: string }): string {
+  return options.protocol ?? "HTTP/1.1";
 }
 
 // --- HTTP server ----------------------------------------------------------------

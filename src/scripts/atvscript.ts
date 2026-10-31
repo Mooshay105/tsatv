@@ -14,6 +14,7 @@ import {
   RepeatState,
   ShuffleState,
 } from "../const.ts";
+import { NotSupportedError } from "../exceptions.ts";
 import * as iface from "../interface.ts";
 import { Semaphore } from "../support/asyncio.ts";
 import { DEBUG, getLogger } from "../support/logging.ts";
@@ -220,7 +221,8 @@ async function handleCommand(args: Namespace, abortSem: Semaphore, storage: ifac
   }
 }
 
-async function runCommand(atv: iface.AppleTV, args: Namespace, abortSem: Semaphore): Promise<Output> {
+/** Run a command against a connected device (exported for tests). */
+export async function runCommand(atv: iface.AppleTV, args: Namespace, abortSem: Semaphore): Promise<Output> {
   if (args.command === "playing") {
     return outputPlaying(
       await atv.metadata.playing(),
@@ -237,9 +239,28 @@ async function runCommand(atv: iface.AppleTV, args: Namespace, abortSem: Semapho
     atv.pushUpdater.listener = new PushPrinter(args.output, atv);
     atv.pushUpdater.start();
     print(args.output(output(true, { values: { power_state: PowerState[atv.power.powerState]!.toLowerCase() } })));
-    audioListener.outputdevicesUpdate([], atv.audio.outputDevices);
+    // Output devices are not supported by all devices (e.g. without MRP/Companion)
+    try {
+      audioListener.outputdevicesUpdate([], atv.audio.outputDevices);
+    } catch (ex) {
+      if (!(ex instanceof NotSupportedError)) throw ex;
+    }
     await waitForInput(abortSem);
     return output(true, { values: { push_updates: "finished" } });
+  }
+
+  // These used to be part of RemoteControl (now deprecated there), use the dedicated
+  // interfaces instead
+  const routedCommands: Record<string, () => Promise<void>> = {
+    volume_up: () => atv.audio.volumeUp(),
+    volume_down: () => atv.audio.volumeDown(),
+    turn_on: () => atv.power.turnOn(),
+    turn_off: () => atv.power.turnOff(),
+  };
+  const routed = routedCommands[args.command];
+  if (routed) {
+    await routed();
+    return output(true, { values: { command: args.command } });
   }
 
   const command = toCamelCase(args.command);

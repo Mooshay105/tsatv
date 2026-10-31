@@ -15,10 +15,13 @@ const START_POSITION = 0.8;
 
 const fixture = useAirPlayDevice();
 
-async function airplayPlayer(): Promise<AirPlayPlayer> {
-  const rtsp = new RtspSession(await fixture.connection());
+async function airplayPlayer(password: string | null = null): Promise<AirPlayPlayer> {
+  const connection = await fixture.connection();
+  connection.password = password;
+  const rtsp = new RtspSession(connection);
   const context = new StreamContext();
   context.credentials = NO_CREDENTIALS;
+  context.password = password;
   return new AirPlayPlayer(rtsp, new AirPlayV1(context, rtsp));
 }
 
@@ -55,4 +58,19 @@ test("play with too many retries", async () => {
   fixture.usecase.airplayPlaybackIdle();
 
   await expect((await airplayPlayer()).playUrl(STREAM, START_POSITION)).rejects.toThrow(PlaybackError);
+});
+
+test("play video with password", async () => {
+  fixture.state.password = "secret";
+  fixture.usecase.airplayPlaybackPlaying();
+  fixture.usecase.airplayPlaybackIdle();
+
+  await (await airplayPlayer("secret")).playUrl(STREAM, START_POSITION);
+  expect(fixture.state.lastAirplayUrl).toBe(STREAM);
+  expect(fixture.state.playCount).toBe(1);
+});
+
+test("play video with wrong password", async () => {
+  fixture.state.password = "secret";
+  await expect((await airplayPlayer("wrong")).playUrl(STREAM, START_POSITION)).rejects.toThrow(AuthenticationError);
 });

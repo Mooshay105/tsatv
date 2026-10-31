@@ -217,6 +217,8 @@ test.each([
   [DeviceModel.AirPortExpressGen2, OperatingSystem.AirPortOS],
   [DeviceModel.HomePod, OperatingSystem.TvOS],
   [DeviceModel.HomePodMini, OperatingSystem.TvOS],
+  [DeviceModel.HomePodGen2, OperatingSystem.TvOS],
+  [DeviceModel.HomePodMiniGen2, OperatingSystem.TvOS],
   [DeviceModel.Gen2, OperatingSystem.TvOS],
   [DeviceModel.Gen3, OperatingSystem.TvOS],
   [DeviceModel.Gen4, OperatingSystem.TvOS],
