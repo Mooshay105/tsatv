@@ -54,6 +54,17 @@ export class SRPAuthHandler {
     return this._session.key;
   }
 
+  /**
+   * Return the X25519 shared secret computed during Pair-Verify (verify1).
+   *
+   * This is the input keying material for every key derived from the verified
+   * session (see verify2), exposed for protocols that derive further keys from it.
+   */
+  get verifySharedSecret(): Buffer {
+    if (!this._shared) throw new Error("pair-verify has not been performed");
+    return this._shared;
+  }
+
   /** Initialize operation by generating new keys. Returns [auth public, verify public]. */
   initialize(): [Buffer, Buffer] {
     this._signingKey = Ed25519PrivateKey.fromPrivateBytes(srpHooks.randomBytes(32));
