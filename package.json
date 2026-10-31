@@ -1,6 +1,6 @@
 {
 	"name": "tsatv",
-	"version": "0.18.0",
+	"version": "1.0.18.0",
 	"description": "TypeScript (Bun) port of pyatv: a client library for Apple TV and AirPlay devices",
 	"keywords": [
 		"apple-tv",
