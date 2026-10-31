@@ -51,6 +51,41 @@ console.log(pairing.service.credentials);
 await pairing.close();
 ```
 
+## Building on tsatv: `tsatv/airplay`
+
+`tsatv/airplay` exposes the lower-level AirPlay building blocks that tsatv itself is
+built from, for packages that implement more of AirPlay on top of it (for example a
+screen mirroring sender). It is a supported entry point. Deep imports such as
+`tsatv/support/rtsp` are not: their layout may change.
+
+```ts
+import { extractCredentials, httpConnect, Protocol, RtspSession, verifyConnection } from "tsatv/airplay";
+
+const service = config.getService(Protocol.AirPlay)!; // config from scan(), credentials applied
+const connection = await httpConnect(String(config.address), service.port);
+const verifier = await verifyConnection(extractCredentials(service), connection);
+const rtsp = new RtspSession(connection); // requests are now HAP encrypted
+const secret = verifier.sharedSecret?.(); // pair-verify secret, for deriving more keys
+```
+
+It contains:
+
+- **Credentials and pairing:** `HapCredentials`, `parseCredentials`, `extractCredentials`,
+  `pairSetup`, `pairVerify`, `verifyConnection` and the HAP / transient procedures.
+  Their pairing headers can be changed (`{ headers: { "X-Apple-HKP": 5 } }`), pair-setup
+  can add TLV items to M5 (`additionalData`), and `sharedSecret()` returns the secret
+  that all session keys are derived from (X25519 for HAP, the SRP key for transient).
+- **Connections and channels:** `HttpConnection`/`httpConnect`, `RtspSession` (with
+  configurable `userAgent` and a per-request `timeout`), `HAPSession`,
+  `AbstractHAPChannel`/`setupChannel` for HAP-framed side channels, TCP/UDP transports
+  and the `Events-*`/`DataStream-*` key derivation labels.
+- **Crypto:** ChaCha20-Poly1305, HKDF, X25519 and Ed25519.
+- **Encodings:** `plistlib` (binary plist), `tlv8` and `opack`.
+- **Timing:** `TimingServer` (NTP style) and the NTP helpers in `timing`.
+- **Feature flags:** `AirPlayFlags`, `parseFeatures`, `hasFlag` (for example
+  `AirPlayFlags.SupportsAirPlayScreen` is bit 7).
+- **Configuration and storage:** `FileStorage`, `MemoryStorage`, `Protocol`.
+
 ## Scripts
 
 The scripts are installed as executables (`bunx atvremote ...`, or globally with

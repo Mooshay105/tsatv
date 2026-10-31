@@ -65,6 +65,9 @@ export class RtspSession {
   dacpId: string = randomBytes(8).readBigUInt64BE().toString(16).toUpperCase();
   activeRemote: number = randomInt(0, 2 ** 32 - 1);
 
+  /** User-Agent sent with every request. */
+  userAgent: string = USER_AGENT;
+
   constructor(readonly connection: HttpConnection) {}
 
   /** Return URI used for session requests. */
@@ -193,6 +196,8 @@ export class RtspSession {
       body?: string | Uint8Array | Record<string, unknown> | null;
       allowError?: boolean;
       protocol?: string;
+      /** Seconds to wait for the response (default: the connection default). */
+      timeout?: number;
     } = {},
   ): Promise<HttpResponse> {
     const cseq = this.cseq;
@@ -232,11 +237,12 @@ export class RtspSession {
     this.requests.set(cseq, [new Event(), null]);
     const resp = await this.connection.sendAndReceive(method, options.uri ?? this.uri, {
       protocol: options.protocol ?? "RTSP/1.0",
-      userAgent: USER_AGENT,
+      userAgent: this.userAgent,
       contentType: options.contentType ?? null,
       headers: hdrs,
       body: body as string | Uint8Array | null,
       allowError: options.allowError ?? false,
+      timeout: options.timeout,
     });
 
     // The response most likely contains a CSeq and it is also very likely to be the

@@ -14,7 +14,7 @@
 		"bun"
 	],
 	"license": "MIT",
-	"author": "Malcolm Hauser",
+	"author": "Mooshay105",
 	"contributors": [
 		"Pierre Ståhl (original pyatv author)"
 	],
@@ -34,6 +34,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"default": "./dist/index.js"
+		},
+		"./airplay": {
+			"types": "./dist/airplay.d.ts",
+			"default": "./dist/airplay.js"
 		},
 		"./*": {
 			"types": "./dist/*.d.ts",

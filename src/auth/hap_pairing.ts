@@ -79,6 +79,12 @@ export interface PairVerifyProcedure {
 
   /** Return derived encryption keys. */
   encryptionKeys(salt: string, outputInfo: string, inputInfo: string): [Buffer, Buffer];
+
+  /**
+   * Return the shared secret that encryptionKeys derives keys from (optional, only
+   * implemented by procedures that have one).
+   */
+  sharedSecret?(): Buffer;
 }
 
 export const NO_CREDENTIALS = new HapCredentials();

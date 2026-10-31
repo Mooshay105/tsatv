@@ -17,7 +17,12 @@ import type { HttpConnection } from "../../../support/http.ts";
 import { getLogger } from "../../../support/logging.ts";
 import { LegacySRPAuthHandler, newCredentials } from "../srp.ts";
 import { AirPlayFlags, hasFlag, parseFeatures } from "../utils.ts";
-import { AirPlayHapPairSetupProcedure, AirPlayHapPairVerifyProcedure } from "./hap.ts";
+import {
+  type AirPlayHapOptions,
+  type AirPlayHapPairSetupOptions,
+  AirPlayHapPairSetupProcedure,
+  AirPlayHapPairVerifyProcedure,
+} from "./hap.ts";
 import { AirPlayHapTransientPairVerifyProcedure } from "./hap_transient.ts";
 import { AirPlayLegacyPairSetupProcedure, AirPlayLegacyPairVerifyProcedure } from "./legacy.ts";
 
@@ -39,8 +44,16 @@ export class NullPairVerifyProcedure implements PairVerifyProcedure {
   }
 }
 
-/** Return procedure object used for Pair-Setup. */
-export function pairSetup(authType: AuthenticationType, connection: HttpConnection): PairSetupProcedure {
+/**
+ * Return procedure object used for Pair-Setup.
+ *
+ * The options only apply to HAP pairing.
+ */
+export function pairSetup(
+  authType: AuthenticationType,
+  connection: HttpConnection,
+  options: AirPlayHapPairSetupOptions = {},
+): PairSetupProcedure {
   LOGGER.debug("Setting up new AirPlay Pair-Setup procedure with type %s", AuthenticationType[authType]);
 
   if (authType === AuthenticationType.Legacy) {
@@ -51,13 +64,21 @@ export function pairSetup(authType: AuthenticationType, connection: HttpConnecti
   if (authType === AuthenticationType.HAP) {
     const srp = new SRPAuthHandler();
     srp.initialize();
-    return new AirPlayHapPairSetupProcedure(connection, srp);
+    return new AirPlayHapPairSetupProcedure(connection, srp, options);
   }
   throw new NotSupportedError(`authentication type ${AuthenticationType[authType]} does not support Pair-Setup`);
 }
 
-/** Return procedure object used for Pair-Verify. */
-export function pairVerify(credentials: HapCredentials, connection: HttpConnection): PairVerifyProcedure {
+/**
+ * Return procedure object used for Pair-Verify.
+ *
+ * The options only apply to HAP and transient pairing.
+ */
+export function pairVerify(
+  credentials: HapCredentials,
+  connection: HttpConnection,
+  options: AirPlayHapOptions = {},
+): PairVerifyProcedure {
   LOGGER.debug("Setting up new AirPlay Pair-Verify procedure with type %s", AuthenticationType[credentials.type]);
 
   if (credentials.type === AuthenticationType.Null) return new NullPairVerifyProcedure();
@@ -69,13 +90,19 @@ export function pairVerify(credentials: HapCredentials, connection: HttpConnecti
 
   const srp = new SRPAuthHandler();
   srp.initialize();
-  if (credentials.type === AuthenticationType.HAP) return new AirPlayHapPairVerifyProcedure(connection, srp, credentials);
-  return new AirPlayHapTransientPairVerifyProcedure(connection, srp);
+  if (credentials.type === AuthenticationType.HAP) {
+    return new AirPlayHapPairVerifyProcedure(connection, srp, credentials, options);
+  }
+  return new AirPlayHapTransientPairVerifyProcedure(connection, srp, options);
 }
 
 /** Perform Pair-Verify on a connection and enable encryption. */
-export async function verifyConnection(credentials: HapCredentials, connection: HttpConnection): Promise<PairVerifyProcedure> {
-  const verifier = pairVerify(credentials, connection);
+export async function verifyConnection(
+  credentials: HapCredentials,
+  connection: HttpConnection,
+  options: AirPlayHapOptions = {},
+): Promise<PairVerifyProcedure> {
+  const verifier = pairVerify(credentials, connection, options);
   const hasEncryptionKeys = await verifier.verifyCredentials();
 
   if (hasEncryptionKeys) {
