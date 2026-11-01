@@ -83,13 +83,19 @@ function decodeProperties(properties: Map<string, Buffer> | Record<string, Buffe
 }
 
 /** Create service request messages. */
-export function createServiceQueries(services: string[], qtype: QueryType): Buffer[] {
+/**
+ * Build PTR (or other) queries for services. With `unicastResponse` (the
+ * default) each question sets the QU bit, asking responders to answer straight
+ * to the sender; without it (QM) they answer by multicast.
+ */
+export function createServiceQueries(services: string[], qtype: QueryType, unicastResponse = true): Buffer[] {
+  const qclass = unicastResponse ? 0x8001 : 0x0001;
   const queries: Buffer[] = [];
   for (let i = 0; i < Math.ceil(services.length / SERVICES_PER_MSG); i++) {
     const serviceChunk = services.slice(i * SERVICES_PER_MSG, i * SERVICES_PER_MSG + 4);
     const msg = new DnsMessage(0x35ff);
-    msg.questions.push(...serviceChunk.map((s) => new DnsQuestion(s, qtype, 0x8001)));
-    msg.questions.push(new DnsQuestion(SLEEP_PROXY_SERVICE, qtype, 0x8001));
+    msg.questions.push(...serviceChunk.map((s) => new DnsQuestion(s, qtype, qclass)));
+    msg.questions.push(new DnsQuestion(SLEEP_PROXY_SERVICE, qtype, qclass));
     queries.push(msg.pack());
   }
   return queries;
@@ -389,6 +395,8 @@ export const mdnsHooks = {
 /** Protocol to make multicast requests. */
 export class MulticastDnsSdClientProtocol {
   readonly queries: Buffer[];
+  /** The same queries asking for multicast (QM) answers. */
+  readonly multicastQueries: Buffer[];
   queryResponses = new Map<string, QueryResponse>();
   readonly endCondition: (response: Response) => boolean;
   readonly semaphore = new Signal();
@@ -403,6 +411,7 @@ export class MulticastDnsSdClientProtocol {
     endCondition: ((response: Response) => boolean) | null,
   ) {
     this.queries = createServiceQueries(services, QueryType.PTR);
+    this.multicastQueries = createServiceQueries(services, QueryType.PTR, false);
     this.endCondition = endCondition ?? (() => false);
   }
 
@@ -441,7 +450,12 @@ export class MulticastDnsSdClientProtocol {
   private async _resendLoop(timeout: number, signal: AbortSignal): Promise<void> {
     for (let i = 0; i < Math.ceil(timeout); i++) {
       if (signal.aborted) return;
-      for (const query of this.queries) {
+      // The first round asks for both unicast (QU) and multicast (QM) answers,
+      // later rounds for multicast only (RFC 6762 section 5.4). Many managed
+      // networks (schools, offices) block unicast replies to port 5353, so
+      // QU-only queries find just a few devices there, a different few each
+      // time; multicast answers get through.
+      for (const query of i === 0 ? [...this.queries, ...this.multicastQueries] : this.multicastQueries) {
         logBinary(LOGGER, `Sending multicast DNS request to ${this.address}:${this.port}`, { Data: query }, TRAFFIC_LEVEL);
         this._sendto(query, [this.address, this.port]);
       }
