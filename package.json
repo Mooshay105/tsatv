@@ -18,13 +18,13 @@
 	"contributors": [
 		"Pierre Ståhl (original pyatv author)"
 	],
-	"homepage": "https://github.com/Mooshay105/pyatv-ts#readme",
+	"homepage": "https://github.com/Mooshay105/tsatv#readme",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/Mooshay105/pyatv-ts.git"
+		"url": "git+https://github.com/Mooshay105/tsatv.git"
 	},
 	"bugs": {
-		"url": "https://github.com/Mooshay105/pyatv-ts/issues"
+		"url": "https://github.com/Mooshay105/tsatv/issues"
 	},
 	"type": "module",
 	"main": "./dist/index.js",
